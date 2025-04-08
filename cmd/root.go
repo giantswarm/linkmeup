@@ -141,7 +141,7 @@ func startWebserver() error {
 	// Create web server to serve PAC on port 9999
 	http.HandleFunc("/proxy.pac", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
-		fmt.Fprint(w, pac)
+		_, _ = fmt.Fprint(w, pac)
 	})
 
 	fmt.Printf("\nYour proxy auto-configuration URL:\n\n   http://localhost:9999/proxy.pac\n\n")
