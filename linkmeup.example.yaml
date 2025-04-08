@@ -1,0 +1,3 @@
+installations:
+  - name: myname
+    domain: mybasedomain.example.com

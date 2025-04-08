@@ -1,27 +1,30 @@
-# General Go template repository
+# linkmeup
 
-This is a general template repository containing some basic files every GitHub repo owned by Giant Swarm should have.
+Linkmeup ("_link-me-up_") is a tool to help you access web application in private Giant Swarm installations, with the help of Teleport.
 
-Note also these more specific repositories:
+## Prerequisites
 
-- [template-app](https://github.com/giantswarm/template-app)
-- [gitops-template](https://github.com/giantswarm/gitops-template)
-- [python-app-template](https://github.com/giantswarm/python-app-template)
+1. You need `tsh` installed. [Installation instructions](https://goteleport.com/docs/connect-your-client/tsh/#installing-tsh)
+2. You must have logged in via `tsh login --auth ... --proxy ... CLUSTER`. Giant Swarm users find the correct command in the [intranet](https://intranet.giantswarm.io/docs/support-and-ops/teleport/web-access/).
 
-## Creating a new repository
+## Configuration
 
-Please do not use the `Use this template` function in the GitHub web UI.
+Linkmeup requires a config file. It will look for a file called `linkmeup.yaml` in `$HOME/.config` and in the current working directory. Look at `linkmeup.example.yaml`for an explanation of the format.
 
-Check out the according [handbook article](https://handbook.giantswarm.io/docs/dev-and-releng/repository/go/) for better instructions.
+Giant Swarm users find the latest config in the intranet. (TODO: add link to intranet)
 
-### Some suggestions for your README
+## Installation
 
-After you have created your new repository, you may want to add some of these badges to the top of your README.
+With Go installed, you can install the tool like this:
 
-- **CircleCI:** After enabling builds for this repo via [this link](https://circleci.com/setup-project/gh/giantswarm/linkmeup), you can find badge code on [this page](https://app.circleci.com/settings/project/github/giantswarm/linkmeup/status-badges).
+```bash
+go install github.com/giantswarm/linkmeup@latest
+```
 
-- **Go reference:** use [this helper](https://pkg.go.dev/badge/) to create the markdown code.
+## Usage
 
-- **Go report card:** enter the module name on the [front page](https://goreportcard.com/) and hit "Generate report". Then use this markdown code for your badge: `[![Go report card](https://goreportcard.com/badge/github.com/giantswarm/linkmeup)](https://goreportcard.com/report/github.com/giantswarm/linkmeup)`
+Simply run `linkmeup` in the terminal.
 
-- **Sourcegraph "used by N projects" badge**: for public Go repos only: `[![Sourcegraph](https://sourcegraph.com/github.com/giantswarm/linkmeup/-/badge.svg)](https://sourcegraph.com/github.com/giantswarm/linkmeup)`
+Use the automatic proxy configuration address `http://localhost:999/proxy.pac` in your browser or operating system settings. This will instruct clients to use the proxy servers only for the specific host names configured.
+
+Hit Ctrl + C to stop the program.
