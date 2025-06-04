@@ -37,7 +37,7 @@ func New(logger *slog.Logger, name string, domain string) (*Proxy, error) {
 	selector := fmt.Sprintf("ins=%s,cluster=%s,role=control-plane", name, name)
 
 	// Detect available nodes by executing `tsh ls --format=names ins=MC_NAME,cluster=MC_NAME,role=control-plane`
-	cmd := exec.Command("tsh", "ls", "--format=names", selector)
+	cmd := exec.Command("tsh", "ls", "--format=names", selector) //nolint:gosec
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
