@@ -28,13 +28,14 @@ func New(logger *slog.Logger, name string, domain string) (*Proxy, error) {
 
 	logger.Info("Starting proxy", slog.String("name", name), slog.String("domain", domain), slog.Int("port", port))
 	host := fmt.Sprintf("root@role=control-plane,mc=%s", name)
+	//nolint:gosec
 	err := exec.Command(
 		"tsh",
 		"ssh",
 		"--no-remote-exec",
 		"--dynamic-forward",
 		fmt.Sprintf("%d", port),
-		host).Start() //nolint:gosec
+		host).Start()
 	if err != nil {
 		return nil, fmt.Errorf("failed to start proxy for %s: %v", name, err)
 	}

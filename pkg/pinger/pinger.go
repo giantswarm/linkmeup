@@ -89,7 +89,7 @@ func (p *Pinger) Ping(ctx context.Context, url string) PingResult {
 		result.Error = fmt.Errorf("request failed: %w", err)
 		return result
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	result.Success = resp.StatusCode >= 200 && resp.StatusCode < 500
 	result.ResponseCode = resp.StatusCode

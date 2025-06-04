@@ -268,14 +268,16 @@ func pingProxy(ctx context.Context, p *pinger.Pinger, prx *proxy.Proxy) {
 	url := fmt.Sprintf("https://happaapi.%s/healthz", prx.Domain)
 	result := p.Ping(pingCtx, url)
 
+	durationMs := result.Duration.Milliseconds()
+
 	// Log the result
 	if result.Success {
-		logger.Debug("Ping successful", slog.String("name", prx.Name), slog.Int("response_code", result.ResponseCode), slog.Duration("duration", result.Duration))
+		logger.Debug("Ping successful", slog.String("name", prx.Name), slog.Int("response_code", result.ResponseCode), slog.Int64("duration", durationMs))
 	} else {
 		if result.Error != nil {
-			logger.Error("Ping failed", slog.String("name", prx.Name), slog.String("error", result.Error.Error()), slog.Duration("duration", result.Duration))
+			logger.Error("Ping failed", slog.String("name", prx.Name), slog.String("error", result.Error.Error()), slog.Int64("duration", durationMs))
 		} else {
-			logger.Debug("Ping response", slog.String("name", prx.Name), slog.Int("response_code", result.ResponseCode), slog.Duration("duration", result.Duration))
+			logger.Debug("Ping response", slog.String("name", prx.Name), slog.Int("response_code", result.ResponseCode), slog.Int64("duration", durationMs))
 		}
 	}
 }
