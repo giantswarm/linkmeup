@@ -36,7 +36,7 @@ func New(config Config) (*Pinger, error) {
 		config.Timeout = 10 * time.Second // Default timeout
 	}
 	if config.ProxyHost == "" {
-		config.ProxyHost = "127.0.0.1"
+		config.ProxyHost = "localhost"
 	}
 
 	client := &http.Client{
