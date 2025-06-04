@@ -4,14 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
+	"github.com/giantswarm/linkmeup/pkg/pacserver"
 	"github.com/giantswarm/linkmeup/pkg/pinger"
 	"github.com/giantswarm/linkmeup/pkg/proxy"
 
@@ -48,9 +46,6 @@ You can use this to configure your browser or operating system to use the proxie
 )
 
 const (
-	// Proxy ports start getting occupied from here.
-	baseProxyPort = 1080
-
 	pingTimeout  = 20 * time.Second // Timeout for pinging proxies
 	pingInterval = 30 * time.Second // Interval between pings
 )
@@ -150,7 +145,7 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	err = startWebserver()
+	err = startWebserver(proxies)
 	if err != nil {
 		return err
 	}
@@ -171,45 +166,13 @@ func startProxies() ([]*proxy.Proxy, error) {
 	return proxies, nil
 }
 
-func startWebserver() error {
-	// Generate PAC from privateInstallations and port numbers.
-	pac := "function FindProxyForURL(url, host) {"
-	for i, inst := range config.Installations {
-		pac += fmt.Sprintf("\n  if (dnsDomainIs(host, '%s')) { return 'SOCKS5 localhost:%d'; }", inst.Domain, baseProxyPort+i)
+func startWebserver(proxies []*proxy.Proxy) error {
+	server, err := pacserver.New(logger, proxies, 9999)
+	if err != nil {
+		return fmt.Errorf("failed to create PAC server: %w", err)
 	}
-	pac += "\n  return 'DIRECT';\n}\n"
 
-	// Create web server to serve PAC on port 9999
-	logger.Info("Serving proxy auto-configuration (PAC) file", slog.String("url", "http://localhost:9999/proxy.pac"))
-	http.HandleFunc("/proxy.pac", func(w http.ResponseWriter, r *http.Request) {
-		logger.Debug("Serving request to PAC file", slog.String("url", r.URL.String()))
-		w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
-		_, _ = fmt.Fprint(w, pac)
-	})
-
-	go func() {
-		server := &http.Server{
-			Addr:         ":9999",
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 5 * time.Second,
-			IdleTimeout:  60 * time.Second,
-		}
-		err := server.ListenAndServe()
-		if err != nil {
-			logger.Error("Auto-configuration web server error", slog.String("error", err.Error()))
-			os.Exit(1)
-		}
-	}()
-
-	// Set up channel to capture signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Wait for termination signal
-	logger.Info("Press Ctrl+C to quit.")
-	<-sigChan
-	logger.Info("Shutting down proxies and auto-configuration server")
-
+	server.Serve()
 	return nil
 }
 
