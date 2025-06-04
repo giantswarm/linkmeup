@@ -1,14 +1,19 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/giantswarm/linkmeup/pkg/pinger"
+	"github.com/giantswarm/linkmeup/pkg/proxy"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -16,8 +21,9 @@ import (
 
 var (
 	// Used for flags.
-	cfgFile string
-	config  Config
+	cfgFile  string
+	logLevel string
+	config   Config
 
 	rootCmd = &cobra.Command{
 		Use:   "linkmeup",
@@ -37,11 +43,16 @@ You can use this to configure your browser or operating system to use the proxie
 `,
 		RunE: runRootCommand,
 	}
+
+	logger *slog.Logger
 )
 
 const (
 	// Proxy ports start getting occupied from here.
 	baseProxyPort = 1080
+
+	pingTimeout  = 20 * time.Second // Timeout for pinging proxies
+	pingInterval = 30 * time.Second // Interval between pings
 )
 
 // Execute executes the root command.
@@ -53,6 +64,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default $HOME/.config/linkmeup.yaml)")
+	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "set the log level (debug, info, warn, error)")
 }
 
 type Config struct {
@@ -82,31 +94,61 @@ func initConfig() {
 
 	viper.AutomaticEnv()
 
+	// Add a logger to the root command
+	level := slog.LevelInfo
+	switch logLevel {
+	case "debug":
+		level = slog.LevelDebug
+	case "info":
+		level = slog.LevelInfo
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		fmt.Printf("Invalid log level: %s. Valid options are: debug, info, warn, error, fatal.\n", logLevel)
+		os.Exit(1)
+	}
+	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: level,
+	}))
+
 	err := viper.ReadInConfig()
 	if err != nil {
-		fmt.Printf("Error when reading config file: %s\n", err)
+		logger.Error("Error reading config file", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
-	fmt.Println("Using config file:", viper.ConfigFileUsed())
+	logger.Info("Using config file", slog.String("path", viper.ConfigFileUsed()))
 
 	err = viper.Unmarshal(&config)
 	if err != nil {
-		fmt.Printf("unable to decode into struct, %s", err)
+		logger.Error("Unable to decode into struct", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
 	if len(config.Installations) == 0 {
-		fmt.Println("No installations found in config file.")
+		logger.Error("No installations found in config file")
 		os.Exit(1)
 	}
 }
 
 func runRootCommand(cmd *cobra.Command, args []string) error {
-	err := startProxies()
+	logger.Debug("Starting linkmeup", slog.String("log_level", logLevel))
+
+	proxies, err := startProxies()
 	if err != nil {
 		return err
 	}
+
+	go func() {
+		time.Sleep(10 * time.Second) // Give proxies some time to start
+		ctx := context.Background()
+		err = startPinger(ctx, proxies)
+		if err != nil {
+			logger.Error("Error in pinger", slog.String("error", err.Error()))
+		}
+	}()
 
 	err = startWebserver()
 	if err != nil {
@@ -117,17 +159,16 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 }
 
 // Starts a Teleport port-forward process for each entry in privateInstallations.
-func startProxies() error {
-	for i, inst := range config.Installations {
-		port := baseProxyPort + i
-		fmt.Printf("Starting proxy for %s (%s) on port %d\n", inst.Name, inst.Domain, port)
-		host := fmt.Sprintf("root@role=control-plane,mc=%s", inst.Name)
-		err := exec.Command("tsh", "ssh", "--no-remote-exec", "--dynamic-forward", fmt.Sprintf("%d", port), host).Start() //nolint:gosec
+func startProxies() ([]*proxy.Proxy, error) {
+	proxies := make([]*proxy.Proxy, 0, len(config.Installations))
+	for _, inst := range config.Installations {
+		p, err := proxy.New(logger, inst.Name, inst.Domain)
 		if err != nil {
-			return fmt.Errorf("failed to start proxy for %s: %v", inst.Name, err)
+			return nil, fmt.Errorf("failed to start proxy for %s: %w", inst.Name, err)
 		}
+		proxies = append(proxies, p)
 	}
-	return nil
+	return proxies, nil
 }
 
 func startWebserver() error {
@@ -139,13 +180,12 @@ func startWebserver() error {
 	pac += "\n  return 'DIRECT';\n}\n"
 
 	// Create web server to serve PAC on port 9999
+	logger.Info("Serving proxy auto-configuration (PAC) file", slog.String("url", "http://localhost:9999/proxy.pac"))
 	http.HandleFunc("/proxy.pac", func(w http.ResponseWriter, r *http.Request) {
+		logger.Debug("Serving request to PAC file", slog.String("url", r.URL.String()))
 		w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
 		_, _ = fmt.Fprint(w, pac)
 	})
-
-	fmt.Printf("\nYour proxy auto-configuration URL:\n\n   http://localhost:9999/proxy.pac\n\n")
-	fmt.Println("Please apply this URL in your system or browser settings.")
 
 	go func() {
 		server := &http.Server{
@@ -156,7 +196,7 @@ func startWebserver() error {
 		}
 		err := server.ListenAndServe()
 		if err != nil {
-			fmt.Printf("Auto-configuration web server error: %s\n", err)
+			logger.Error("Auto-configuration web server error", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
 	}()
@@ -166,9 +206,76 @@ func startWebserver() error {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Wait for termination signal
-	fmt.Println("Press Ctrl+C to quit.")
+	logger.Info("Press Ctrl+C to quit.")
 	<-sigChan
-	fmt.Println("\nShutting down proxies and auto-configuration server.")
+	logger.Info("Shutting down proxies and auto-configuration server")
 
 	return nil
+}
+
+func startPinger(ctx context.Context, proxies []*proxy.Proxy) error {
+	logger.Debug("Starting pinger")
+
+	// Create a wait group to keep track of goroutines
+	var wg sync.WaitGroup
+
+	// Start a goroutine for each proxy
+	for _, prx := range proxies {
+		wg.Add(1)
+
+		go func(prx *proxy.Proxy) {
+			defer wg.Done()
+
+			logger.Debug("Creating proxy pinger", slog.String("proxy", prx.Name), slog.String("proxy", prx.Domain), slog.Int("port", prx.Port))
+			pingerConfig := pinger.Config{
+				ProxyPort: prx.Port,
+				Timeout:   pingTimeout,
+			}
+			proxyPinger, err := pinger.New(pingerConfig)
+			if err != nil {
+				logger.Error("Failed to create pinger", slog.String("proxy", prx.Name), slog.String("error", err.Error()))
+				return
+			}
+
+			ticker := time.NewTicker(pingInterval)
+			defer ticker.Stop()
+
+			// Also ping once immediately
+			pingProxy(ctx, proxyPinger, prx)
+
+			// Then ping on each tick
+			for {
+				select {
+				case <-ticker.C:
+					pingProxy(ctx, proxyPinger, prx)
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(prx)
+	}
+
+	return nil
+}
+
+// pingProxy pings a proxy and logs the result
+func pingProxy(ctx context.Context, p *pinger.Pinger, prx *proxy.Proxy) {
+	// Create a context with timeout for this specific ping
+	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
+	defer cancel()
+
+	// Ping the proxy
+	url := fmt.Sprintf("https://happaapi.%s/healthz", prx.Domain)
+	result := p.Ping(pingCtx, url)
+
+	// Log the result
+	if result.Success {
+		logger.Debug("Ping successful", slog.String("name", prx.Name), slog.Int("response_code", result.ResponseCode), slog.Duration("duration", result.Duration))
+	} else {
+		if result.Error != nil {
+			logger.Error("Ping failed", slog.String("name", prx.Name), slog.String("error", result.Error.Error()), slog.Duration("duration", result.Duration))
+		} else {
+			logger.Debug("Ping response", slog.String("name", prx.Name), slog.Int("response_code", result.ResponseCode), slog.Duration("duration", result.Duration))
+		}
+	}
 }
