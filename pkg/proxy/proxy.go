@@ -59,7 +59,7 @@ func New(logger *slog.Logger, name string, domain string) (*Proxy, error) {
 	logger.Debug("Nodes for installation", slog.String("selector", selector), slog.Int("count", len(nodes)), slog.String("name", name), slog.String("nodes", strings.Join(nodes, ", ")))
 
 	// Pick a random node
-	node := nodes[rand.IntN(len(nodes))]
+	node := nodes[rand.IntN(len(nodes))] //nolint:gosec
 
 	logger.Info("Starting proxy", slog.String("name", name), slog.String("domain", domain), slog.String("node", node), slog.Int("port", port))
 	host := fmt.Sprintf("root@%s", node)
