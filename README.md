@@ -11,7 +11,7 @@ Linkmeup ("_link-me-up_") is a tool to help you access web application in privat
 
 Linkmeup requires a config file. It will look for a file called `linkmeup.yaml` in `$HOME/.config` and in the current working directory. Look at `linkmeup.example.yaml`for an explanation of the format.
 
-Giant Swarm users find the latest config in the intranet. (TODO: add link to intranet)
+Giant Swarm users find the latest config in the [intranet](https://intranet.giantswarm.io/docs/support-and-ops/teleport/web-access/#linkmeup).
 
 ## Installation
 
