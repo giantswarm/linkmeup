@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/linkmeup/pkg/pacserver"
 	"github.com/giantswarm/linkmeup/pkg/pinger"
 	"github.com/giantswarm/linkmeup/pkg/proxy"
+	"github.com/lmittmann/tint"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -104,8 +105,9 @@ func initConfig() {
 		fmt.Printf("Invalid log level: %s. Valid options are: debug, info, warn, error, fatal.\n", logLevel)
 		os.Exit(1)
 	}
-	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: level,
+	logger = slog.New(tint.NewHandler(os.Stdout, &tint.Options{
+		Level:      level,
+		TimeFormat: "Jan 02 15:04:05",
 	}))
 
 	err := viper.ReadInConfig()
