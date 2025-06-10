@@ -12,8 +12,8 @@ import (
 	"github.com/giantswarm/linkmeup/pkg/pacserver"
 	"github.com/giantswarm/linkmeup/pkg/pinger"
 	"github.com/giantswarm/linkmeup/pkg/proxy"
-	"github.com/lmittmann/tint"
 
+	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
