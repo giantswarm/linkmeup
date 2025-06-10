@@ -6,6 +6,7 @@ package proxy
 import (
 	"fmt"
 	"log/slog"
+	rand "math/rand/v2"
 	"os/exec"
 	"strings"
 )
@@ -57,8 +58,11 @@ func New(logger *slog.Logger, name string, domain string) (*Proxy, error) {
 
 	logger.Debug("Nodes for installation", slog.String("selector", selector), slog.Int("count", len(nodes)), slog.String("name", name), slog.String("nodes", strings.Join(nodes, ", ")))
 
-	logger.Info("Starting proxy", slog.String("name", name), slog.String("domain", domain), slog.Int("port", port))
-	host := fmt.Sprintf("root@%s", selector)
+	// Pick a random node
+	node := nodes[rand.IntN(len(nodes))]
+
+	logger.Info("Starting proxy", slog.String("name", name), slog.String("domain", domain), slog.String("node", node), slog.Int("port", port))
+	host := fmt.Sprintf("root@%s", node)
 	//nolint:gosec
 	err = exec.Command(
 		"tsh",
