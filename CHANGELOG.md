@@ -11,8 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2025-06-10
 
-### Added
-
 - First implementation
 
 [Unreleased]: https://github.com/giantswarm/linkmeup/compare/v0.1.0...HEAD
