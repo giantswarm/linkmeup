@@ -55,7 +55,7 @@ func New(logger *slog.Logger, name string, domain string) (*Proxy, error) {
 		return nil, fmt.Errorf("no nodes found for installation %s", name)
 	}
 
-	logger.Debug("Nodes for installation", slog.Int("count", len(nodes)), slog.String("name", name), slog.String("nodes", strings.Join(nodes, ", ")))
+	logger.Debug("Nodes for installation", slog.String("selector", selector), slog.Int("count", len(nodes)), slog.String("name", name), slog.String("nodes", strings.Join(nodes, ", ")))
 
 	logger.Info("Starting proxy", slog.String("name", name), slog.String("domain", domain), slog.Int("port", port))
 	host := fmt.Sprintf("root@%s", selector)
