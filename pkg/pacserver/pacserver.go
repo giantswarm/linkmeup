@@ -5,9 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/giantswarm/linkmeup/pkg/proxy"
@@ -63,15 +60,6 @@ func (p *PacServer) Serve() {
 			p.logger.Error("Auto-configuration web server error", slog.String("error", err.Error()))
 		}
 	}()
-
-	// Set up channel to capture signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Wait for termination signal
-	p.logger.Info("Press Ctrl+C to quit.")
-	<-sigChan
-	p.logger.Info("Shutting down proxies and auto-configuration server")
 }
 
 func renderPacFile(proxies []*proxy.Proxy) string {
