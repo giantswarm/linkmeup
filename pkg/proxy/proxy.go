@@ -108,8 +108,8 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 		pinger: pinger,
 	}
 
-	p.selectNode()
-	p.Start()
+	_ = p.selectNode()
+	_ = p.Start()
 
 	return p, nil
 }
@@ -123,7 +123,7 @@ func (p *Proxy) selectNode() string {
 
 	// shuffle nodes
 	for i := range p.nodes {
-		j := rand.IntN(i + 1)
+		j := rand.IntN(i + 1) //nolint:gosec
 		p.nodes[i], p.nodes[j] = p.nodes[j], p.nodes[i]
 	}
 
