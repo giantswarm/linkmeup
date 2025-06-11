@@ -10,6 +10,7 @@ import (
 	rand "math/rand/v2"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -46,11 +47,11 @@ type Proxy struct {
 	// List of Teleport node names available for this proxy.
 	// Only one will be used.
 	nodes []string
-	// The node actually used for the SSH tunnel.
+	// The node actually used for the SSH tunnel
 	nodeActive string
-	// Pid of the SSH tunnel Teleport process.
-	pid int
-	// Healthy determines if the proxy is healthy.
+	// SSH tunnel Teleport process
+	process *os.Process
+	// Healthy determines if the proxy is healthy
 	healthy bool
 	// Last ping result
 	lastPingResult *pingResult
@@ -104,7 +105,7 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 		pinger: pinger,
 	}
 
-	p.SelectNode()
+	p.selectNode()
 	p.Start()
 
 	return p, nil
@@ -112,7 +113,7 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 
 // Selects the node to use for the SSH tunnel.
 // If a node was previously selected, a different one will be chosen if possible.
-func (p *Proxy) SelectNode() string {
+func (p *Proxy) selectNode() string {
 	// shuffle nodes
 	for i := range p.nodes {
 		j := rand.IntN(i + 1)
@@ -145,7 +146,7 @@ func (p *Proxy) Start() error {
 		return fmt.Errorf("failed to start proxy for %s: %v", p.Name, err)
 	}
 
-	p.pid = cmd.Process.Pid
+	p.process = cmd.Process
 	p.nodeActive = node
 
 	// Pinger routine
@@ -209,7 +210,7 @@ func newPinger(port int) (*http.Client, error) {
 
 // Ping performs a GET request to the root URL of the provided host.
 // It returns information about the success, response code, any errors, and the duration.
-func (p *Proxy) Ping(ctx context.Context) {
+func (p *Proxy) Ping(ctx context.Context) bool {
 	result := &pingResult{}
 
 	// Ensure the URL has a scheme
@@ -258,6 +259,8 @@ func (p *Proxy) Ping(ctx context.Context) {
 	}
 
 	p.lastPingResult = result
+
+	return result.success
 }
 
 // hasScheme checks if the URL has a scheme (http:// or https://)
