@@ -114,6 +114,10 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 // Selects the node to use for the SSH tunnel.
 // If a node was previously selected, a different one will be chosen if possible.
 func (p *Proxy) selectNode() string {
+	if len(p.nodes) == 0 {
+		return ""
+	}
+
 	// shuffle nodes
 	for i := range p.nodes {
 		j := rand.IntN(i + 1)
@@ -134,6 +138,10 @@ func (p *Proxy) selectNode() string {
 
 // Start creates the SSH tunnel and thus starts the proxy.
 func (p *Proxy) Start() error {
+	if len(p.nodes) == 0 {
+		return fmt.Errorf("failed to start proxy for %s: no nodes available", p.Name)
+	}
+
 	// Pick a random node
 	node := p.nodes[rand.IntN(len(p.nodes))] //nolint:gosec
 
