@@ -1,16 +1,12 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
-	"time"
 
 	"github.com/giantswarm/linkmeup/pkg/pacserver"
-	"github.com/giantswarm/linkmeup/pkg/pinger"
 	"github.com/giantswarm/linkmeup/pkg/proxy"
 
 	"github.com/lmittmann/tint"
@@ -44,11 +40,6 @@ You can use this to configure your browser or operating system to use the proxie
 	}
 
 	logger *slog.Logger
-)
-
-const (
-	pingTimeout  = 20 * time.Second // Timeout for pinging proxies
-	pingInterval = 30 * time.Second // Interval between pings
 )
 
 // Execute executes the root command.
@@ -138,15 +129,6 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	go func() {
-		time.Sleep(10 * time.Second) // Give proxies some time to start
-		ctx := context.Background()
-		err = startPinger(ctx, proxies)
-		if err != nil {
-			logger.Error("Error in pinger", slog.String("error", err.Error()))
-		}
-	}()
-
 	err = startWebserver(proxies)
 	if err != nil {
 		return err
@@ -159,7 +141,8 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 func startProxies() ([]*proxy.Proxy, error) {
 	proxies := make([]*proxy.Proxy, 0, len(config.Installations))
 	for _, inst := range config.Installations {
-		p, err := proxy.New(logger, inst.Name, inst.Domain)
+		checkEndpoint := fmt.Sprintf("https://happaapi.%s/healthz", inst.Domain)
+		p, err := proxy.New(logger, inst.Name, inst.Domain, checkEndpoint)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start proxy for %s: %w", inst.Name, err)
 		}
@@ -176,73 +159,4 @@ func startWebserver(proxies []*proxy.Proxy) error {
 
 	server.Serve()
 	return nil
-}
-
-func startPinger(ctx context.Context, proxies []*proxy.Proxy) error {
-	logger.Debug("Starting pinger")
-
-	// Create a wait group to keep track of goroutines
-	var wg sync.WaitGroup
-
-	// Start a goroutine for each proxy
-	for _, prx := range proxies {
-		wg.Add(1)
-
-		go func(prx *proxy.Proxy) {
-			defer wg.Done()
-
-			logger.Debug("Creating proxy pinger", slog.String("proxy", prx.Name), slog.String("proxy", prx.Domain), slog.Int("port", prx.Port))
-			pingerConfig := pinger.Config{
-				ProxyPort: prx.Port,
-				Timeout:   pingTimeout,
-			}
-			proxyPinger, err := pinger.New(pingerConfig)
-			if err != nil {
-				logger.Error("Failed to create pinger", slog.String("proxy", prx.Name), slog.String("error", err.Error()))
-				return
-			}
-
-			ticker := time.NewTicker(pingInterval)
-			defer ticker.Stop()
-
-			// Also ping once immediately
-			pingProxy(ctx, proxyPinger, prx)
-
-			// Then ping on each tick
-			for {
-				select {
-				case <-ticker.C:
-					pingProxy(ctx, proxyPinger, prx)
-				case <-ctx.Done():
-					return
-				}
-			}
-		}(prx)
-	}
-
-	return nil
-}
-
-// pingProxy pings a proxy and logs the result
-func pingProxy(ctx context.Context, p *pinger.Pinger, prx *proxy.Proxy) {
-	// Create a context with timeout for this specific ping
-	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
-	defer cancel()
-
-	// Ping the proxy
-	url := fmt.Sprintf("https://happaapi.%s/healthz", prx.Domain)
-	result := p.Ping(pingCtx, url)
-
-	durationMs := result.Duration.Milliseconds()
-
-	// Log the result
-	if result.Success {
-		logger.Debug("Ping successful", slog.String("name", prx.Name), slog.Int("response_code", result.ResponseCode), slog.Int64("duration", durationMs))
-	} else {
-		if result.Error != nil {
-			logger.Error("Ping failed", slog.String("name", prx.Name), slog.String("error", result.Error.Error()), slog.Int64("duration", durationMs))
-		} else {
-			logger.Debug("Ping response", slog.String("name", prx.Name), slog.Int("response_code", result.ResponseCode), slog.Int64("duration", durationMs))
-		}
-	}
 }
