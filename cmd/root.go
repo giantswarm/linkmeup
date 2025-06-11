@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/giantswarm/linkmeup/pkg/pacserver"
 	"github.com/giantswarm/linkmeup/pkg/proxy"
@@ -133,6 +135,28 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	done := make(chan bool, 1)
+
+	go func() {
+		sig := <-sigs
+		fmt.Println(sig)
+		for _, p := range proxies {
+			err = p.Stop()
+			if err != nil {
+				logger.Error("Failed to stop proxy", slog.String("name", p.Name), slog.String("domain", p.Domain), slog.String("error", err.Error()))
+			} else {
+				logger.Debug("Stopped proxy", slog.String("name", p.Name), slog.String("domain", p.Domain))
+			}
+		}
+		done <- true
+		os.Exit(1)
+	}()
+
+	logger.Info("Press Ctrl+C to quit.")
+	<-done
 
 	return nil
 }

@@ -167,6 +167,25 @@ func (p *Proxy) Start() error {
 	return nil
 }
 
+func (p *Proxy) Stop() error {
+	if p.process == nil {
+		return nil // Nothing to stop
+	}
+
+	p.logger.Debug("Killing proxy process", slog.String("name", p.Name), slog.Int("pid", p.process.Pid))
+
+	err := p.process.Kill()
+	if err != nil {
+		return fmt.Errorf("failed to stop proxy for %s: %v", p.Name, err)
+	}
+
+	p.process = nil
+	p.nodeActive = ""
+	p.healthy = false
+
+	return nil
+}
+
 // Returns available Teleport nodes for a given selector.
 func getNodes(selector string) ([]string, error) {
 	cmd := exec.Command("tsh", "ls", "--format=names", selector) //nolint:gosec
