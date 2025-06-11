@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -60,6 +61,8 @@ type Proxy struct {
 	logger *slog.Logger
 	// Pinger
 	pinger *http.Client
+	// Ensure there is only one pinger per proxy
+	pingerMu sync.Mutex
 }
 
 func New(logger *slog.Logger, name string, domain string, checkEndpoint string) (*Proxy, error) {
@@ -157,7 +160,12 @@ func (p *Proxy) Start() error {
 	p.process = cmd.Process
 	p.nodeActive = node
 
-	// Pinger routine
+	return nil
+}
+
+func (p *Proxy) PingConstantly() {
+	p.pingerMu.Lock()
+	defer p.pingerMu.Unlock()
 	ctx := context.Background()
 	go func() {
 		ticker := time.NewTicker(pingInterval)
@@ -166,13 +174,25 @@ func (p *Proxy) Start() error {
 		for {
 			select {
 			case <-ticker.C:
-				p.Ping(ctx)
+				success := p.Ping(ctx)
+				if !success {
+					p.logger.Debug("Restarting proxy with different node", slog.String("name", p.Name))
+					err := p.Stop()
+					if err != nil {
+						p.logger.Error("Failed to stop proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
+					}
+					p.selectNode()
+					err = p.Start()
+					if err != nil {
+						p.logger.Error("Failed to restart proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
+					}
+				}
 			case <-ctx.Done():
+				p.pingerMu.Unlock()
 				return
 			}
 		}
 	}()
-	return nil
 }
 
 func (p *Proxy) Stop() error {
@@ -188,7 +208,6 @@ func (p *Proxy) Stop() error {
 	}
 
 	p.process = nil
-	p.nodeActive = ""
 	p.healthy = false
 
 	return nil

@@ -170,6 +170,9 @@ func startProxies() ([]*proxy.Proxy, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to start proxy for %s: %w", inst.Name, err)
 		}
+
+		p.PingConstantly()
+
 		proxies = append(proxies, p)
 	}
 	return proxies, nil
