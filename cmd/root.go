@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/giantswarm/linkmeup/pkg/pacserver"
 	"github.com/giantswarm/linkmeup/pkg/proxy"
+	"github.com/giantswarm/linkmeup/pkg/tshstatus"
 
 	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
@@ -125,6 +127,21 @@ func initConfig() {
 
 func runRootCommand(cmd *cobra.Command, args []string) error {
 	logger.Debug("Starting linkmeup", slog.String("log_level", logLevel))
+
+	status, err := tshstatus.GetStatus(logger)
+	if err != nil {
+		if errors.Is(err, tshstatus.ErrNotLoggedIn) {
+			logger.Error("You are not logged in to Teleport. Please log in using 'tsh login --proxy ... --auth ...'.")
+			os.Exit(1)
+		}
+		return fmt.Errorf("failed to get tsh status: %w", err)
+	}
+
+	if status == nil || status.Active == nil || status.Active.ProfileURL == "" {
+		logger.Error("No active Teleport profile found. Please log in using 'tsh login'.")
+		os.Exit(1)
+	}
+	logger.Info("Active Teleport profile found", slog.String("cluster", status.Active.Cluster), slog.Time("valid_until", status.Active.ValidUntil))
 
 	proxies, err := startProxies()
 	if err != nil {

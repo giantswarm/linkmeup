@@ -1,6 +1,6 @@
 # linkmeup
 
-Linkmeup ("_link-me-up_") is a tool to help you access web application in private Giant Swarm installations, with the help of Teleport.
+Linkmeup ("_link-me-up_") is a tool to help you access web applications (HTTPS protocol) in private Giant Swarm installations, with the help of Teleport.
 
 ## Prerequisites
 
@@ -28,3 +28,7 @@ Simply run `linkmeup` in the terminal.
 Use the automatic proxy configuration address `http://localhost:999/proxy.pac` in your browser or operating system settings. This will instruct clients to use the proxy servers only for the specific host names configured.
 
 Hit Ctrl + C to stop the program.
+
+## Limitations
+
+- In some cases, linkmeup may cause the opening of several browser tabs for Teleport re-authentication. We still have to investigate if we can avoid this.
