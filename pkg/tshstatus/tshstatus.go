@@ -12,8 +12,10 @@ import (
 )
 
 var (
-	// NotLoggedInError is returned when the user is not logged in to Teleport.
+	// ErrNotLoggedIn is returned when the user is not logged in to Teleport.
 	ErrNotLoggedIn = fmt.Errorf("user not logged in")
+
+	ErrActiveProfileExpired = fmt.Errorf("active profile expired")
 
 	ErrEmptyCommandOutput = fmt.Errorf("command 'tsh status --format=json' yielded no output")
 )
@@ -33,6 +35,9 @@ func GetStatus(logger *slog.Logger) (*Status, error) {
 		stderr := strings.TrimSpace(stderrBuf.String())
 		if strings.Contains(strings.ToLower(stderr), "not logged in") {
 			return nil, ErrNotLoggedIn
+		}
+		if strings.Contains(strings.ToLower(stderr), "profile expired") {
+			return nil, ErrActiveProfileExpired
 		}
 		return nil, err
 	}

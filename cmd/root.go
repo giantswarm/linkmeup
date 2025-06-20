@@ -130,7 +130,7 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 
 	status, err := tshstatus.GetStatus(logger)
 	if err != nil {
-		if errors.Is(err, tshstatus.ErrNotLoggedIn) {
+		if errors.Is(err, tshstatus.ErrNotLoggedIn) || errors.Is(err, tshstatus.ErrActiveProfileExpired) {
 			logger.Error("You are not logged in to Teleport. Please log in using 'tsh login --proxy ... --auth ...'.")
 			os.Exit(1)
 		}
