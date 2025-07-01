@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Checks Teleport login status at startup and presents info to user if not logged in.
+
 ## [0.2.0] - 2025-06-11
 
 ### Changed
