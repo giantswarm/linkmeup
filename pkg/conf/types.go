@@ -2,6 +2,7 @@ package conf
 
 type Config struct {
 	Installations []Installation `mapstructure:"installations"`
+	Teleport      Teleport       `mapstructure:"teleport"`
 }
 
 // Settings for a Giant Swarm installation

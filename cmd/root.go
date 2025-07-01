@@ -120,14 +120,25 @@ func initConfig() {
 func runRootCommand(cmd *cobra.Command, args []string) error {
 	logger.Debug("Starting linkmeup", slog.String("log_level", logLevel))
 
+	// Build login command to show to user in case of error
+	proxy := config.Teleport.Proxy
+	if proxy == "" {
+		proxy = "PROXY"
+	}
+	auth := config.Teleport.Auth
+	if auth == "" {
+		auth = "AUTH"
+	}
+	loginCmd := fmt.Sprintf("tsh login --proxy %s --auth %s", proxy, auth)
+
 	status, err := tshstatus.GetStatus(logger)
 	if err != nil {
 		if errors.Is(err, tshstatus.ErrNotLoggedIn) || errors.Is(err, tshstatus.ErrActiveProfileExpired) {
-			logger.Error("You are not logged in to Teleport. Please log in using 'tsh login --proxy ... --auth ...'.")
+			logger.Error(fmt.Sprintf("You are not logged in to Teleport. Please log in using '%s'.", loginCmd))
 			os.Exit(1)
 		}
 		if errors.Is(err, tshstatus.ErrNoValidKeyPair) {
-			logger.Error("Your Teleport key pair is not valid. Please log out using 'tsh logout' and then log in using 'tsh login --proxy ... --auth ...'.")
+			logger.Error(fmt.Sprintf("Your Teleport key pair is not valid. Please log out using 'tsh logout' and then log in using '%s'.", loginCmd))
 			os.Exit(1)
 		}
 
