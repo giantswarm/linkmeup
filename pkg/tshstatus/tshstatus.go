@@ -18,6 +18,8 @@ var (
 	ErrActiveProfileExpired = fmt.Errorf("active profile expired")
 
 	ErrEmptyCommandOutput = fmt.Errorf("command 'tsh status --format=json' yielded no output")
+
+	ErrNoValidKeyPair = fmt.Errorf("private and public keys do not form a valid keypair")
 )
 
 // Executes 'tsh status --format=json' and returns the output as struct.
@@ -39,7 +41,10 @@ func GetStatus(logger *slog.Logger) (*Status, error) {
 		if strings.Contains(strings.ToLower(stderr), "profile expired") {
 			return nil, ErrActiveProfileExpired
 		}
-		return nil, err
+		if strings.Contains(strings.ToLower(stderr), "private and public keys do not form a valid keypair") {
+			return nil, ErrNoValidKeyPair
+		}
+		return nil, fmt.Errorf("%v, stderr: %s", err, stderr)
 	}
 
 	// No stdout, so we check for an error
