@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/giantswarm/linkmeup/pkg/conf"
 	"github.com/giantswarm/linkmeup/pkg/pacserver"
 	"github.com/giantswarm/linkmeup/pkg/proxy"
 	"github.com/giantswarm/linkmeup/pkg/tshstatus"
@@ -22,7 +23,7 @@ var (
 	// Used for flags.
 	cfgFile  string
 	logLevel string
-	config   Config
+	config   conf.Config
 
 	rootCmd = &cobra.Command{
 		Use:   "linkmeup",
@@ -56,15 +57,6 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default $HOME/.config/linkmeup.yaml)")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "set the log level (debug, info, warn, error)")
-}
-
-type Config struct {
-	Installations []Installation `mapstructure:"installations"`
-}
-
-type Installation struct {
-	Name   string `mapstructure:"name"`
-	Domain string `mapstructure:"domain"`
 }
 
 func initConfig() {
@@ -134,6 +126,11 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 			logger.Error("You are not logged in to Teleport. Please log in using 'tsh login --proxy ... --auth ...'.")
 			os.Exit(1)
 		}
+		if errors.Is(err, tshstatus.ErrNoValidKeyPair) {
+			logger.Error("Your Teleport key pair is not valid. Please log out using 'tsh logout' and then log in using 'tsh login --proxy ... --auth ...'.")
+			os.Exit(1)
+		}
+
 		return fmt.Errorf("failed to get tsh status: %w", err)
 	}
 
