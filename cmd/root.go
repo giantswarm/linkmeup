@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -8,8 +9,10 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/giantswarm/linkmeup/pkg/conf"
 	"github.com/giantswarm/linkmeup/pkg/pacserver"
 	"github.com/giantswarm/linkmeup/pkg/proxy"
+	"github.com/giantswarm/linkmeup/pkg/tshstatus"
 
 	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
@@ -20,7 +23,7 @@ var (
 	// Used for flags.
 	cfgFile  string
 	logLevel string
-	config   Config
+	config   conf.Config
 
 	rootCmd = &cobra.Command{
 		Use:   "linkmeup",
@@ -54,15 +57,6 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default $HOME/.config/linkmeup.yaml)")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "set the log level (debug, info, warn, error)")
-}
-
-type Config struct {
-	Installations []Installation `mapstructure:"installations"`
-}
-
-type Installation struct {
-	Name   string `mapstructure:"name"`
-	Domain string `mapstructure:"domain"`
 }
 
 func initConfig() {
@@ -125,6 +119,37 @@ func initConfig() {
 
 func runRootCommand(cmd *cobra.Command, args []string) error {
 	logger.Debug("Starting linkmeup", slog.String("log_level", logLevel))
+
+	// Build login command to show to user in case of error
+	proxy := config.Teleport.Proxy
+	if proxy == "" {
+		proxy = "PROXY"
+	}
+	auth := config.Teleport.Auth
+	if auth == "" {
+		auth = "AUTH"
+	}
+	loginCmd := fmt.Sprintf("tsh login --proxy %s --auth %s", proxy, auth)
+
+	status, err := tshstatus.GetStatus(logger)
+	if err != nil {
+		if errors.Is(err, tshstatus.ErrNotLoggedIn) || errors.Is(err, tshstatus.ErrActiveProfileExpired) {
+			logger.Error(fmt.Sprintf("You are not logged in to Teleport. Please log in using '%s'.", loginCmd))
+			os.Exit(1)
+		}
+		if errors.Is(err, tshstatus.ErrNoValidKeyPair) {
+			logger.Error(fmt.Sprintf("Your Teleport key pair is not valid. Please log out using 'tsh logout' and then log in using '%s'.", loginCmd))
+			os.Exit(1)
+		}
+
+		return fmt.Errorf("failed to get tsh status: %w", err)
+	}
+
+	if status == nil || status.Active == nil || status.Active.ProfileURL == "" {
+		logger.Error("No active Teleport profile found. Please log in using 'tsh login'.")
+		os.Exit(1)
+	}
+	logger.Info("Active Teleport profile found", slog.String("cluster", status.Active.Cluster), slog.Time("valid_until", status.Active.ValidUntil))
 
 	proxies, err := startProxies()
 	if err != nil {

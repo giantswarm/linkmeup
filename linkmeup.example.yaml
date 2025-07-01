@@ -1,3 +1,6 @@
+teleport:
+  proxy: teleport.mydomain.tld
+  auth: myauth
 installations:
   - name: myname
     domain: mybasedomain.example.com
