@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed error handling in case no Teleport nodes are available for an installation.
+
 ## [0.3.0] - 2025-07-01
 
 ### Added

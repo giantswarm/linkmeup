@@ -216,16 +216,37 @@ func (p *Proxy) Stop() error {
 // Returns available Teleport nodes for a given selector.
 func getNodes(selector string) ([]string, error) {
 	cmd := exec.Command("tsh", "ls", "--format=names", selector) //nolint:gosec
-	output, err := cmd.CombinedOutput()
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	// Get exit code
+	exitCode := 0
 	if err != nil {
-		exitErr, ok := err.(*exec.ExitError)
-		if ok {
-			return nil, fmt.Errorf("failed to get nodes: %v", exitErr)
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			// Non-exit error (e.g., command not found)
+			return nil, fmt.Errorf("failed to execute command: %v", err)
 		}
-		return nil, fmt.Errorf("failed to get nodes: %v", err)
 	}
 
-	nodes := strings.Split(strings.TrimSpace(string(output)), "\n")
+	stdoutStr := strings.TrimSpace(stdout.String())
+	stderrStr := strings.TrimSpace(stderr.String())
+
+	// Log the results for debugging
+	if exitCode != 0 || stderrStr != "" {
+		return nil, fmt.Errorf("command failed with exit code %d, stderr: %s", exitCode, stderrStr)
+	}
+
+	if stdoutStr == "" {
+		return nil, fmt.Errorf("no nodes found for selector %s", selector)
+	}
+
+	nodes := strings.Split(stdoutStr, "\n")
 	if len(nodes) == 0 || (len(nodes) == 1 && nodes[0] == "") {
 		return nil, fmt.Errorf("no nodes found for selector %s", selector)
 	}
