@@ -174,17 +174,20 @@ func (p *Proxy) PingConstantly() {
 		for {
 			select {
 			case <-ticker.C:
-				success := p.Ping(ctx)
-				if !success {
-					p.logger.Debug("Restarting proxy with different node", slog.String("name", p.Name))
-					err := p.Stop()
-					if err != nil {
-						p.logger.Error("Failed to stop proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
-					}
-					p.selectNode()
-					err = p.Start()
-					if err != nil {
-						p.logger.Error("Failed to restart proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
+				// TODO: Handle case where no nodes are available
+				if len(p.nodes) > 0 {
+					success := p.Ping(ctx)
+					if !success {
+						p.logger.Debug("Restarting proxy with different node", slog.String("name", p.Name))
+						err := p.Stop()
+						if err != nil {
+							p.logger.Error("Failed to stop proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
+						}
+						p.selectNode()
+						err = p.Start()
+						if err != nil {
+							p.logger.Error("Failed to restart proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
+						}
 					}
 				}
 			case <-ctx.Done():
@@ -279,6 +282,9 @@ func newPinger(port int) (*http.Client, error) {
 // It returns information about the success, response code, any errors, and the duration.
 func (p *Proxy) Ping(ctx context.Context) bool {
 	result := &pingResult{}
+	if len(p.nodes) == 0 {
+		return false
+	}
 
 	// Ensure the URL has a scheme
 	url := p.CheckEndpoint
