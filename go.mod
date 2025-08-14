@@ -2,7 +2,7 @@ module github.com/giantswarm/linkmeup
 
 go 1.23.0
 
-toolchain go1.24.6
+toolchain go1.25.0
 
 require (
 	github.com/lmittmann/tint v1.1.2
