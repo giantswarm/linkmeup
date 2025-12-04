@@ -168,6 +168,12 @@ func (p *Proxy) PingConstantly() {
 	defer p.pingerMu.Unlock()
 	ctx := context.Background()
 	go func() {
+		// Do an initial ping immediately after a short delay for the tunnel to establish
+		time.Sleep(2 * time.Second)
+		if len(p.nodes) > 0 {
+			p.Ping(ctx)
+		}
+
 		ticker := time.NewTicker(pingInterval)
 		defer ticker.Stop()
 
@@ -339,4 +345,31 @@ func (p *Proxy) Ping(ctx context.Context) bool {
 // hasScheme checks if the URL has a scheme (http:// or https://)
 func hasScheme(url string) bool {
 	return len(url) > 7 && (url[:7] == "http://" || url[:8] == "https://")
+}
+
+// ProxyStatus represents the current status of a proxy for display purposes.
+type ProxyStatus struct {
+	Name       string
+	Domain     string
+	Port       int
+	Healthy    bool
+	ActiveNode string
+	NodeCount  int
+}
+
+// Status returns the current status of the proxy.
+func (p *Proxy) Status() ProxyStatus {
+	return ProxyStatus{
+		Name:       p.Name,
+		Domain:     p.Domain,
+		Port:       p.Port,
+		Healthy:    p.healthy,
+		ActiveNode: p.nodeActive,
+		NodeCount:  len(p.nodes),
+	}
+}
+
+// IsHealthy returns whether the proxy is currently healthy.
+func (p *Proxy) IsHealthy() bool {
+	return p.healthy
 }
