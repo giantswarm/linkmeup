@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -13,11 +14,14 @@ import (
 	"github.com/giantswarm/linkmeup/pkg/pacserver"
 	"github.com/giantswarm/linkmeup/pkg/proxy"
 	"github.com/giantswarm/linkmeup/pkg/tshstatus"
+	"github.com/giantswarm/linkmeup/pkg/tui"
 
 	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
+
+const pacPort = 9999
 
 var (
 	// Used for flags.
@@ -121,24 +125,24 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 	logger.Debug("Starting linkmeup", slog.String("log_level", logLevel))
 
 	// Build login command to show to user in case of error
-	proxy := config.Teleport.Proxy
-	if proxy == "" {
-		proxy = "PROXY"
+	teleportProxy := config.Teleport.Proxy
+	if teleportProxy == "" {
+		teleportProxy = "PROXY"
 	}
 	auth := config.Teleport.Auth
 	if auth == "" {
 		auth = "AUTH"
 	}
-	loginCmd := fmt.Sprintf("tsh login --proxy %s --auth %s", proxy, auth)
+	loginCmd := fmt.Sprintf("tsh login --proxy %s --auth %s", teleportProxy, auth)
 
 	status, err := tshstatus.GetStatus(logger)
 	if err != nil {
 		if errors.Is(err, tshstatus.ErrNotLoggedIn) || errors.Is(err, tshstatus.ErrActiveProfileExpired) {
-			logger.Error(fmt.Sprintf("You are not logged in to Teleport. Please log in using '%s'.", loginCmd))
+			fmt.Printf("Error: You are not logged in to Teleport. Please log in using '%s'.\n", loginCmd)
 			os.Exit(1)
 		}
 		if errors.Is(err, tshstatus.ErrNoValidKeyPair) {
-			logger.Error(fmt.Sprintf("Your Teleport key pair is not valid. Please log out using 'tsh logout' and then log in using '%s'.", loginCmd))
+			fmt.Printf("Error: Your Teleport key pair is not valid. Please log out using 'tsh logout' and then log in using '%s'.\n", loginCmd)
 			os.Exit(1)
 		}
 
@@ -146,10 +150,13 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	if status == nil || status.Active == nil || status.Active.ProfileURL == "" {
-		logger.Error("No active Teleport profile found. Please log in using 'tsh login'.")
+		fmt.Println("Error: No active Teleport profile found. Please log in using 'tsh login'.")
 		os.Exit(1)
 	}
-	logger.Info("Active Teleport profile found", slog.String("cluster", status.Active.Cluster), slog.Time("valid_until", status.Active.ValidUntil))
+	logger.Debug("Active Teleport profile found", slog.String("cluster", status.Active.Cluster), slog.Time("valid_until", status.Active.ValidUntil))
+
+	// Silence the logger during TUI operation - redirect to discard
+	logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	proxies, err := startProxies()
 	if err != nil {
@@ -161,29 +168,36 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Set up signal handling for graceful shutdown
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	done := make(chan bool, 1)
 
 	go func() {
-		sig := <-sigs
-		fmt.Println(sig)
-		for _, p := range proxies {
-			err = p.Stop()
-			if err != nil {
-				logger.Error("Failed to stop proxy", slog.String("name", p.Name), slog.String("domain", p.Domain), slog.String("error", err.Error()))
-			} else {
-				logger.Debug("Stopped proxy", slog.String("name", p.Name), slog.String("domain", p.Domain))
-			}
-		}
-		done <- true
-		os.Exit(1)
+		<-sigs
+		stopProxies(proxies)
+		os.Exit(0)
 	}()
 
-	logger.Info("Press Ctrl+C to quit.")
-	<-done
+	// Run the TUI - this blocks until the user quits
+	err = tui.Run(proxies, pacPort)
+	if err != nil {
+		return fmt.Errorf("TUI error: %w", err)
+	}
+
+	// Clean up proxies when TUI exits
+	stopProxies(proxies)
 
 	return nil
+}
+
+func stopProxies(proxies []*proxy.Proxy) {
+	for _, p := range proxies {
+		err := p.Stop()
+		if err != nil {
+			// Can't log to TUI anymore, just continue
+			continue
+		}
+	}
 }
 
 // Starts a Teleport port-forward process for each entry in privateInstallations.
@@ -204,7 +218,7 @@ func startProxies() ([]*proxy.Proxy, error) {
 }
 
 func startWebserver(proxies []*proxy.Proxy) error {
-	server, err := pacserver.New(logger, proxies, 9999)
+	server, err := pacserver.New(logger, proxies, pacPort)
 	if err != nil {
 		return fmt.Errorf("failed to create PAC server: %w", err)
 	}

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced log-based output with interactive TUI (Terminal User Interface) using Bubble Tea.
+- Main view now shows a table of all configured installations with their status.
+
 ## [0.3.1] - 2025-07-10
 
 ### Fixed
