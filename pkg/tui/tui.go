@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	btable "github.com/evertras/bubble-table/table"
+
 	"github.com/giantswarm/linkmeup/pkg/proxy"
 )
 
