@@ -2,7 +2,7 @@ module github.com/giantswarm/linkmeup
 
 go 1.25.0
 
-toolchain go1.26.0
+toolchain go1.26.1
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
