@@ -13,23 +13,9 @@ import (
 	"github.com/giantswarm/linkmeup/pkg/proxy"
 )
 
-const (
-	columnKeyName       = "name"
-	columnKeyDomain     = "domain"
-	columnKeyStatus     = "status"
-	columnKeyPort       = "port"
-	columnKeyNodes      = "nodes"
-	columnKeyActiveNode = "activeNode"
-)
-
 var (
 	// Column widths
 	colWidths = []int{20, 35, 12, 6, 7, 25}
-
-	// Styles
-	baseStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#5a4fcf"))
 
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
