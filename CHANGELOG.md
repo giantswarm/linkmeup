@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0] - 2026-04-01
 
+### Changed
+
+- Update bubbletea to v2, and other dependency updates
+
 ## [0.4.0] - 2025-12-05
 
 ### Changed
