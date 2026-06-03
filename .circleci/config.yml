@@ -16,6 +16,7 @@ workflows:
             tags:
               only: /^v.*/
       - architect/upload-release-assets:
+          binary: linkmeup
           context: architect
           requires:
             - go-build
