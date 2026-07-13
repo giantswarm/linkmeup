@@ -96,7 +96,7 @@ func initConfig() {
 		fmt.Printf("Invalid log level: %s. Valid options are: debug, info, warn, error, fatal.\n", logLevel)
 		os.Exit(1)
 	}
-	logger = slog.New(tint.NewHandler(os.Stdout, &tint.Options{
+	logger = slog.New(tint.NewTextHandler(os.Stdout, &tint.Options{
 		Level:      level,
 		TimeFormat: "Jan 02 15:04:05",
 	}))
