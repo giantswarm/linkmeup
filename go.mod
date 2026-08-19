@@ -3,7 +3,7 @@ module github.com/giantswarm/linkmeup
 go 1.25.0
 
 require (
-	charm.land/bubbletea/v2 v2.0.8
+	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/lmittmann/tint v1.2.0
 	github.com/spf13/cobra v1.10.2
