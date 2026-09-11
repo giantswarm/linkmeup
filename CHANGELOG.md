@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- TUI: press `Enter` on a selected installation to open a detail view explaining its health, including the last check result (HTTP status, error, latency, age), the Teleport nodes and active node, the node lookup error behind `- No Nodes`, and a log of recent events like failed checks and tunnel restarts.
+
 ### Changed
 
 - Release binaries now include darwin/amd64, darwin/arm64, windows/amd64, and windows/arm64 alongside the existing linux targets. Windows binaries are named `template-windows-<arch>.exe`.
