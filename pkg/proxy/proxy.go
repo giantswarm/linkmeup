@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	rand "math/rand/v2"
@@ -120,11 +121,12 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 	selector := fmt.Sprintf("ins=%s,cluster=%s,role=control-plane", name, name)
 
 	nodes, nodesErr := getNodes(selector)
-	if nodesErr != nil {
+	switch {
+	case nodesErr != nil:
 		logger.Error("Failed to get nodes for installation", slog.String("selector", selector), slog.String("name", name), slog.String("domain", domain), slog.String("error", nodesErr.Error()))
-	}
-	if len(nodes) == 0 {
+	case len(nodes) == 0:
 		logger.Error("No nodes found for installation", slog.String("selector", selector), slog.String("name", name), slog.String("domain", domain))
+		nodesErr = fmt.Errorf("no nodes matched selector %s", selector)
 	}
 
 	logger.Debug("Nodes for installation", slog.String("selector", selector), slog.Int("count", len(nodes)), slog.String("name", name), slog.String("nodes", strings.Join(nodes, ", ")))
@@ -146,12 +148,9 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 		pinger:   pinger,
 	}
 
-	switch {
-	case nodesErr != nil:
-		p.addEvent("node lookup failed: %v", nodesErr)
-	case len(nodes) == 0:
-		p.addEvent("no nodes found for selector %s", selector)
-	default:
+	if len(nodes) == 0 {
+		p.addEvent("no nodes available: %v", nodesErr)
+	} else {
 		p.addEvent("found %d node(s) for selector %s", len(nodes), selector)
 	}
 
@@ -210,8 +209,8 @@ func (p *Proxy) Start() error {
 	defer p.mu.Unlock()
 
 	if len(p.nodes) == 0 {
-		p.lastStartErr = fmt.Errorf("failed to start proxy for %s: no nodes available", p.Name)
-		return p.lastStartErr
+		// Not recorded as a start error: NodesError already explains this.
+		return fmt.Errorf("failed to start proxy for %s: no nodes available", p.Name)
 	}
 
 	// Pick a random node
@@ -227,6 +226,12 @@ func (p *Proxy) Start() error {
 		p.addEventLocked("failed to start tunnel on node %s: %v", node, err)
 		return p.lastStartErr
 	}
+
+	// Reap the child once it exits. Without a Wait, every restarted tunnel
+	// stays around as a zombie for the lifetime of linkmeup.
+	go func() {
+		_ = cmd.Wait()
+	}()
 
 	p.process = cmd.Process
 	p.nodeActive = node
@@ -259,7 +264,6 @@ func (p *Proxy) PingConstantly() {
 					if !success {
 						p.logger.Debug("Restarting proxy with different node", slog.String("name", p.Name))
 						p.addEvent("restarting proxy after failed check")
-						p.incRestarts()
 						err := p.Stop()
 						if err != nil {
 							p.logger.Error("Failed to stop proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
@@ -269,6 +273,8 @@ func (p *Proxy) PingConstantly() {
 						err = p.Start()
 						if err != nil {
 							p.logger.Error("Failed to restart proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
+						} else {
+							p.incRestarts()
 						}
 					}
 				}
@@ -291,7 +297,7 @@ func (p *Proxy) Stop() error {
 	p.logger.Debug("Killing proxy process", slog.String("name", p.Name), slog.Int("pid", pid))
 
 	err := p.process.Kill()
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return fmt.Errorf("failed to stop proxy for %s: %v", p.Name, err)
 	}
 
@@ -343,16 +349,12 @@ func getNodes(selector string) ([]string, error) {
 		return nil, fmt.Errorf("command failed with exit code %d, stderr: %s", exitCode, stderrStr)
 	}
 
+	// An empty result is not an error: the selector simply matched nothing.
 	if stdoutStr == "" {
-		return nil, fmt.Errorf("no nodes found for selector %s", selector)
+		return nil, nil
 	}
 
-	nodes := strings.Split(stdoutStr, "\n")
-	if len(nodes) == 0 || (len(nodes) == 1 && nodes[0] == "") {
-		return nil, fmt.Errorf("no nodes found for selector %s", selector)
-	}
-
-	return nodes, nil
+	return strings.Split(stdoutStr, "\n"), nil
 }
 
 func newPinger(port int) (*http.Client, error) {

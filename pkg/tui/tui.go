@@ -26,6 +26,8 @@ const (
 	infoMaxEvents = 10
 	// Shown instead of a timestamp when something never happened.
 	infoNever = "never"
+	// Shown for an age below one second.
+	infoJustNow = "just now"
 )
 
 var (
@@ -202,7 +204,7 @@ func (m Model) View() tea.View {
 
 	content := m.listView()
 	if m.showInfo && m.cursor < len(m.proxies) {
-		content = renderInfo(m.proxies[m.cursor].Status(), m.width)
+		content = renderInfo(m.proxies[m.cursor].Status(), m.width, m.height, time.Now())
 	}
 
 	v := tea.NewView(content)
@@ -263,8 +265,10 @@ func (m Model) listView() string {
 	return b.String()
 }
 
-// renderInfo renders the detail page for a single proxy.
-func renderInfo(status proxy.ProxyStatus, width int) string {
+// renderInfo renders the detail page for a single proxy. The event list is
+// trimmed to whatever vertical space is left, because bubbletea clips the frame
+// to the terminal in alt-screen mode and would silently cut off the footer.
+func renderInfo(status proxy.ProxyStatus, width, height int, now time.Time) string {
 	if width <= 0 {
 		width = infoFallbackWidth
 	}
@@ -299,7 +303,7 @@ func renderInfo(status proxy.ProxyStatus, width int) string {
 	}
 
 	b.WriteString("\n")
-	field("Last check", formatLastCheck(status))
+	field("Last check", formatLastCheck(status, now))
 	if status.LastError != "" {
 		field("Error", status.LastError)
 	}
@@ -308,28 +312,72 @@ func renderInfo(status proxy.ProxyStatus, width int) string {
 	}
 
 	if len(status.Events) > 0 {
-		b.WriteString("\n")
-		b.WriteString(infoIndent)
-		b.WriteString(sectionStyle.Render("Recent events"))
-		b.WriteString("\n")
-
 		eventStyle := lipgloss.NewStyle().Width(maxInt(20, width-len(infoIndent)-infoTimeWidth))
 
-		shown := 0
-		for i := len(status.Events) - 1; i >= 0 && shown < infoMaxEvents; i-- {
+		// Render newest first, so the oldest events are the ones dropped.
+		rows := make([]string, 0, infoMaxEvents)
+		for i := len(status.Events) - 1; i >= 0 && len(rows) < infoMaxEvents; i-- {
 			event := status.Events[i]
 			stamp := timeStyle.Render(event.Time.Format("15:04:05")) + "  "
 			row := lipgloss.JoinHorizontal(lipgloss.Top, stamp, eventStyle.Render(event.Message))
-			b.WriteString(infoIndent)
-			b.WriteString(strings.ReplaceAll(row, "\n", "\n"+infoIndent))
-			b.WriteString("\n")
+			rows = append(rows, infoIndent+strings.ReplaceAll(row, "\n", "\n"+infoIndent))
+		}
+
+		// Lines still free after the blank line, the section header and the
+		// two lines the footer occupies.
+		free := len(rows)
+		if height > 0 {
+			free = height - lineCount(b.String()) - 4
+		}
+
+		shown, used := 0, 0
+		for _, row := range rows {
+			rowLines := lineCount(row)
+			if used+rowLines > free {
+				break
+			}
+			used += rowLines
 			shown++
+		}
+
+		// Make room for the note about what was left out.
+		omitted := len(status.Events) - shown
+		for omitted > 0 && shown > 0 && used+1 > free {
+			shown--
+			used -= lineCount(rows[shown])
+			omitted++
+		}
+
+		if shown > 0 {
+			b.WriteString("\n")
+			b.WriteString(infoIndent)
+			b.WriteString(sectionStyle.Render("Recent events"))
+			b.WriteString("\n")
+
+			for _, row := range rows[:shown] {
+				b.WriteString(row)
+				b.WriteString("\n")
+			}
+
+			if omitted > 0 {
+				b.WriteString(infoIndent)
+				b.WriteString(timeStyle.Render(fmt.Sprintf("… %d older event(s) not shown", omitted)))
+				b.WriteString("\n")
+			}
 		}
 	}
 
 	b.WriteString(helpStyle.Render(infoIndent + "↑/↓: Prev/Next • Enter/Esc: Back • q: Quit"))
 
 	return b.String()
+}
+
+// lineCount returns how many terminal lines a rendered block occupies.
+func lineCount(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(strings.TrimSuffix(s, "\n"), "\n") + 1
 }
 
 // formatNodes describes the known Teleport nodes of a proxy.
@@ -341,7 +389,7 @@ func formatNodes(status proxy.ProxyStatus) string {
 }
 
 // formatLastCheck summarizes the most recent health check in one line.
-func formatLastCheck(status proxy.ProxyStatus) string {
+func formatLastCheck(status proxy.ProxyStatus, now time.Time) string {
 	if status.LastCheck.IsZero() {
 		if status.NodeCount == 0 {
 			return infoNever + " - no nodes available"
@@ -349,7 +397,7 @@ func formatLastCheck(status proxy.ProxyStatus) string {
 		return infoNever
 	}
 
-	parts := []string{formatAge(status.LastCheck)}
+	parts := []string{formatAge(status.LastCheck, now)}
 	if status.LastDuration > 0 {
 		parts = append(parts, "took "+status.LastDuration.Round(time.Millisecond).String())
 	}
@@ -358,14 +406,14 @@ func formatLastCheck(status proxy.ProxyStatus) string {
 	return strings.Join(parts, " · ")
 }
 
-// formatAge renders how long ago something happened.
-func formatAge(t time.Time) string {
+// formatAge renders how long ago something happened, relative to now.
+func formatAge(t, now time.Time) string {
 	if t.IsZero() {
 		return infoNever
 	}
-	age := time.Since(t)
+	age := now.Sub(t)
 	if age < time.Second {
-		return "just now"
+		return infoJustNow
 	}
 	return age.Round(time.Second).String() + " ago"
 }

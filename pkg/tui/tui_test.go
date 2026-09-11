@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,8 @@ import (
 const (
 	// Wide enough that no value gets wrapped, so assertions can match plain text.
 	testWidth = 200
+	// Tall enough that the event list is never trimmed.
+	testHeight = 100
 
 	keyEnter = "enter"
 
@@ -22,8 +25,13 @@ const (
 	testCheckURL = "https://happaapi.mybase.example.com/healthz"
 )
 
+// testNow is a fixed instant, so age rendering never depends on wall clock time.
+func testNow() time.Time {
+	return time.Date(2026, 9, 11, 13, 5, 0, 0, time.UTC)
+}
+
 func TestRenderInfoUnhealthy(t *testing.T) {
-	now := time.Now()
+	now := testNow()
 	status := proxy.ProxyStatus{
 		Name:           testName,
 		Domain:         testDomain,
@@ -45,7 +53,7 @@ func TestRenderInfoUnhealthy(t *testing.T) {
 		},
 	}
 
-	out := renderInfo(status, testWidth)
+	out := renderInfo(status, testWidth, testHeight, testNow())
 
 	for _, want := range []string{
 		testName + " — details",
@@ -78,7 +86,7 @@ func TestRenderInfoNoNodes(t *testing.T) {
 		NodesError:    "command failed with exit code 1, stderr: access denied",
 	}
 
-	out := renderInfo(status, testWidth)
+	out := renderInfo(status, testWidth, testHeight, testNow())
 
 	for _, want := range []string{
 		"- No Nodes",
@@ -105,12 +113,12 @@ func TestRenderInfoHealthy(t *testing.T) {
 		NodeCount:      1,
 		CheckEndpoint:  testCheckURL,
 		Nodes:          []string{testNode},
-		LastCheck:      time.Now().Add(-5 * time.Second),
+		LastCheck:      testNow().Add(-5 * time.Second),
 		LastStatusCode: 200,
 		LastDuration:   180 * time.Millisecond,
 	}
 
-	out := renderInfo(status, testWidth)
+	out := renderInfo(status, testWidth, testHeight, testNow())
 
 	for _, want := range []string{"✓ Healthy", "5s ago", "HTTP 200"} {
 		if !strings.Contains(out, want) {
@@ -124,14 +132,84 @@ func TestRenderInfoHealthy(t *testing.T) {
 }
 
 func TestFormatAge(t *testing.T) {
-	if got := formatAge(time.Time{}); got != "never" {
-		t.Errorf("formatAge(zero) = %q, want %q", got, "never")
+	now := testNow()
+
+	tests := []struct {
+		name string
+		when time.Time
+		want string
+	}{
+		{"zero", time.Time{}, "never"},
+		{"same instant", now, infoJustNow},
+		{"sub second", now.Add(-999 * time.Millisecond), infoJustNow},
+		{"seconds", now.Add(-12 * time.Second), "12s ago"},
+		{"rounded up", now.Add(-12500 * time.Millisecond), "13s ago"},
+		{"minutes", now.Add(-90 * time.Second), "1m30s ago"},
 	}
-	if got := formatAge(time.Now()); got != "just now" {
-		t.Errorf("formatAge(now) = %q, want %q", got, "just now")
+
+	for _, tc := range tests {
+		if got := formatAge(tc.when, now); got != tc.want {
+			t.Errorf("formatAge(%s) = %q, want %q", tc.name, got, tc.want)
+		}
 	}
-	if got := formatAge(time.Now().Add(-90 * time.Second)); got != "1m30s ago" {
-		t.Errorf("formatAge(-90s) = %q, want %q", got, "1m30s ago")
+}
+
+func TestFormatLastCheck(t *testing.T) {
+	now := testNow()
+
+	tests := []struct {
+		name   string
+		status proxy.ProxyStatus
+		want   string
+	}{
+		{"never checked", proxy.ProxyStatus{NodeCount: 1}, "never"},
+		{"no nodes", proxy.ProxyStatus{}, "never - no nodes available"},
+		{
+			"failed",
+			proxy.ProxyStatus{NodeCount: 1, LastCheck: now.Add(-12 * time.Second), LastDuration: 10 * time.Second},
+			"12s ago · took 10s · HTTP -",
+		},
+		{
+			"succeeded",
+			proxy.ProxyStatus{NodeCount: 1, LastCheck: now.Add(-5 * time.Second), LastDuration: 180 * time.Millisecond, LastStatusCode: 200},
+			"5s ago · took 180ms · HTTP 200",
+		},
+	}
+
+	for _, tc := range tests {
+		if got := formatLastCheck(tc.status, now); got != tc.want {
+			t.Errorf("formatLastCheck(%s) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestRenderInfoTrimsEventsToHeight(t *testing.T) {
+	now := testNow()
+
+	status := proxy.ProxyStatus{
+		Name: testName, Domain: testDomain, Port: 1080,
+		ActiveNode: testNode, NodeCount: 1, CheckEndpoint: testCheckURL,
+		Nodes: []string{testNode}, LastCheck: now.Add(-12 * time.Second),
+	}
+	for i := 0; i < 10; i++ {
+		status.Events = append(status.Events, proxy.Event{Time: now, Message: fmt.Sprintf("event number %d", i)})
+	}
+
+	const height = 24
+	out := renderInfo(status, testWidth, height, now)
+
+	if got := lineCount(out); got > height {
+		t.Errorf("rendered %d lines into a %d line terminal:\n%s", got, height, out)
+	}
+	if !strings.Contains(out, "Enter/Esc: Back") {
+		t.Errorf("footer was cut off:\n%s", out)
+	}
+	// Newest events survive, oldest are dropped and accounted for.
+	if !strings.Contains(out, "event number 9") {
+		t.Errorf("newest event missing:\n%s", out)
+	}
+	if !strings.Contains(out, "not shown") {
+		t.Errorf("expected a note about omitted events:\n%s", out)
 	}
 }
 
