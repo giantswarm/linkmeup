@@ -241,7 +241,7 @@ func (m Model) listView() string {
 
 	// PAC URL info
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("  PAC URL: %s", pacURLStyle.Render(m.pacURL)))
+	fmt.Fprintf(&b, "  PAC URL: %s", pacURLStyle.Render(m.pacURL))
 	b.WriteString("\n")
 
 	// Status counts - use same symbols as table
