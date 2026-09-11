@@ -25,6 +25,8 @@ go install github.com/giantswarm/linkmeup@latest
 
 Simply run `linkmeup` in the terminal.
 
+In the terminal user interface, navigate the list of installations with `↑`/`↓` (or `k`/`j`) and hit `Enter` to see details for the selected installation, including the reason why its proxy is unhealthy. Hit `Enter` or `Esc` to get back to the list, and `q` to quit.
+
 Use the automatic proxy configuration address `http://localhost:999/proxy.pac` in your browser or operating system settings. This will instruct clients to use the proxy servers only for the specific host names configured.
 
 Hit Ctrl + C to stop the program.
