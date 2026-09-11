@@ -24,6 +24,8 @@ const (
 	infoTimeWidth = 10
 	// Number of events shown in the detail view.
 	infoMaxEvents = 10
+	// Shown instead of a timestamp when something never happened.
+	infoNever = "never"
 )
 
 var (
@@ -342,9 +344,9 @@ func formatNodes(status proxy.ProxyStatus) string {
 func formatLastCheck(status proxy.ProxyStatus) string {
 	if status.LastCheck.IsZero() {
 		if status.NodeCount == 0 {
-			return "never - no nodes available"
+			return infoNever + " - no nodes available"
 		}
-		return "never"
+		return infoNever
 	}
 
 	parts := []string{formatAge(status.LastCheck)}
@@ -359,7 +361,7 @@ func formatLastCheck(status proxy.ProxyStatus) string {
 // formatAge renders how long ago something happened.
 func formatAge(t time.Time) string {
 	if t.IsZero() {
-		return "never"
+		return infoNever
 	}
 	age := time.Since(t)
 	if age < time.Second {

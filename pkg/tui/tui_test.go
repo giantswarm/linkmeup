@@ -10,20 +10,29 @@ import (
 	"github.com/giantswarm/linkmeup/pkg/proxy"
 )
 
-// Wide enough that no value gets wrapped, so assertions can match plain text.
-const testWidth = 200
+const (
+	// Wide enough that no value gets wrapped, so assertions can match plain text.
+	testWidth = 200
+
+	keyEnter = "enter"
+
+	testName     = "mycluster"
+	testDomain   = "mybase.example.com"
+	testNode     = "ip-10-0-1-5"
+	testCheckURL = "https://happaapi.mybase.example.com/healthz"
+)
 
 func TestRenderInfoUnhealthy(t *testing.T) {
 	now := time.Now()
 	status := proxy.ProxyStatus{
-		Name:           "mycluster",
-		Domain:         "mybase.example.com",
+		Name:           testName,
+		Domain:         testDomain,
 		Port:           1080,
 		Healthy:        false,
-		ActiveNode:     "ip-10-0-1-5",
+		ActiveNode:     testNode,
 		NodeCount:      2,
-		CheckEndpoint:  "https://happaapi.mybase.example.com/healthz",
-		Nodes:          []string{"ip-10-0-1-5", "ip-10-0-1-9"},
+		CheckEndpoint:  testCheckURL,
+		Nodes:          []string{testNode, "ip-10-0-1-9"},
 		LastCheck:      now.Add(-12 * time.Second),
 		LastStatusCode: 503,
 		LastDuration:   240 * time.Millisecond,
@@ -32,18 +41,18 @@ func TestRenderInfoUnhealthy(t *testing.T) {
 		PID:            4711,
 		Events: []proxy.Event{
 			{Time: now.Add(-time.Minute), Message: "tunnel started on node ip-10-0-1-9 (pid 4711)"},
-			{Time: now.Add(-12 * time.Second), Message: "check failed on node ip-10-0-1-5: HTTP 503"},
+			{Time: now.Add(-12 * time.Second), Message: "check failed on node " + testNode + ": HTTP 503"},
 		},
 	}
 
 	out := renderInfo(status, testWidth)
 
 	for _, want := range []string{
-		"mycluster — details",
-		"mybase.example.com",
+		testName + " — details",
+		testDomain,
 		"✗ Unhealthy",
-		"https://happaapi.mybase.example.com/healthz",
-		"ip-10-0-1-5",
+		testCheckURL,
+		testNode,
 		"2 known",
 		"503",
 		"request failed: unexpected EOF",
@@ -51,7 +60,7 @@ func TestRenderInfoUnhealthy(t *testing.T) {
 		"240ms",
 		"4711",
 		"Recent events",
-		"check failed on node ip-10-0-1-5: HTTP 503",
+		"check failed on node " + testNode + ": HTTP 503",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected detail view to contain %q, got:\n%s", want, out)
@@ -61,11 +70,11 @@ func TestRenderInfoUnhealthy(t *testing.T) {
 
 func TestRenderInfoNoNodes(t *testing.T) {
 	status := proxy.ProxyStatus{
-		Name:          "mycluster",
-		Domain:        "mybase.example.com",
+		Name:          testName,
+		Domain:        testDomain,
 		Port:          1080,
 		NodeCount:     0,
-		CheckEndpoint: "https://happaapi.mybase.example.com/healthz",
+		CheckEndpoint: testCheckURL,
 		NodesError:    "command failed with exit code 1, stderr: access denied",
 	}
 
@@ -88,14 +97,14 @@ func TestRenderInfoNoNodes(t *testing.T) {
 
 func TestRenderInfoHealthy(t *testing.T) {
 	status := proxy.ProxyStatus{
-		Name:           "mycluster",
-		Domain:         "mybase.example.com",
+		Name:           testName,
+		Domain:         testDomain,
 		Port:           1080,
 		Healthy:        true,
-		ActiveNode:     "ip-10-0-1-5",
+		ActiveNode:     testNode,
 		NodeCount:      1,
-		CheckEndpoint:  "https://happaapi.mybase.example.com/healthz",
-		Nodes:          []string{"ip-10-0-1-5"},
+		CheckEndpoint:  testCheckURL,
+		Nodes:          []string{testNode},
 		LastCheck:      time.Now().Add(-5 * time.Second),
 		LastStatusCode: 200,
 		LastDuration:   180 * time.Millisecond,
@@ -142,7 +151,7 @@ func press(t *testing.T, m Model, key string) Model {
 	switch key {
 	case "esc":
 		msg = tea.KeyPressMsg{Code: tea.KeyEscape}
-	case "enter":
+	case keyEnter:
 		msg = tea.KeyPressMsg{Code: tea.KeyEnter}
 	default:
 		msg = tea.KeyPressMsg{Code: rune(key[0]), Text: key}
@@ -161,8 +170,8 @@ func press(t *testing.T, m Model, key string) Model {
 
 func TestInfoKeyTogglesDetailView(t *testing.T) {
 	// enter is the advertised key, i is kept as an alias.
-	for _, key := range []string{"enter", "i"} {
-		m := Model{proxies: []*proxy.Proxy{{Name: "mycluster"}}}
+	for _, key := range []string{keyEnter, "i"} {
+		m := Model{proxies: []*proxy.Proxy{{Name: testName}}}
 
 		m = press(t, m, key)
 		if !m.showInfo {
@@ -177,9 +186,9 @@ func TestInfoKeyTogglesDetailView(t *testing.T) {
 }
 
 func TestEscClosesDetailViewBeforeQuitting(t *testing.T) {
-	m := Model{proxies: []*proxy.Proxy{{Name: "mycluster"}}}
+	m := Model{proxies: []*proxy.Proxy{{Name: testName}}}
 
-	m = press(t, m, "enter")
+	m = press(t, m, keyEnter)
 	m = press(t, m, "esc")
 	if m.showInfo {
 		t.Fatal("expected esc to close the detail view")
@@ -195,7 +204,7 @@ func TestEscClosesDetailViewBeforeQuitting(t *testing.T) {
 }
 
 func TestInfoKeyIgnoredWithoutProxies(t *testing.T) {
-	m := press(t, Model{}, "enter")
+	m := press(t, Model{}, keyEnter)
 	if m.showInfo {
 		t.Fatal("expected enter to do nothing without proxies")
 	}
