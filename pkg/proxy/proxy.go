@@ -25,6 +25,11 @@ var (
 
 	pingTimeout  = 10 * time.Second
 	pingInterval = 30 * time.Second
+	// dialTimeout bounds the SOCKS5 connect and handshake.
+	dialTimeout = 10 * time.Second
+	// idleConnTimeout keeps pooled connections from outliving the tunnel they
+	// were opened through. It must stay below pingInterval.
+	idleConnTimeout = 20 * time.Second
 
 	proxyHost = "localhost"
 )
@@ -101,6 +106,13 @@ type Proxy struct {
 	pinger *http.Client
 	// Ensure there is only one pinger per proxy
 	pingerMu sync.Mutex
+	// pingCtx bounds the lifetime of the check loop. Cancelling it also aborts
+	// an in-flight check.
+	pingCtx context.Context
+	// cancelPing cancels pingCtx.
+	cancelPing context.CancelFunc
+	// pingWG reaches zero once the check loop has returned.
+	pingWG sync.WaitGroup
 }
 
 func New(logger *slog.Logger, name string, domain string, checkEndpoint string) (*Proxy, error) {
@@ -147,6 +159,7 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 		logger:   logger,
 		pinger:   pinger,
 	}
+	p.pingCtx, p.cancelPing = context.WithCancel(context.Background())
 
 	if len(nodes) == 0 {
 		p.addEvent("no nodes available: %v", nodesErr)
@@ -219,6 +232,7 @@ func (p *Proxy) Start() error {
 	p.logger.Info("Starting proxy", slog.String("name", p.Name), slog.String("domain", p.Domain), slog.String("node", node), slog.Int("port", p.Port))
 	host := fmt.Sprintf("root@node=%s,ins=%s", node, p.Name)
 	cmd := exec.Command("tsh", "ssh", "--no-remote-exec", "--dynamic-forward", fmt.Sprintf("%d", p.Port), host) //nolint:gosec
+	setProcessGroup(cmd)
 
 	err := cmd.Start()
 	if err != nil {
@@ -244,10 +258,14 @@ func (p *Proxy) Start() error {
 func (p *Proxy) PingConstantly() {
 	p.pingerMu.Lock()
 	defer p.pingerMu.Unlock()
-	ctx := context.Background()
-	go func() {
+
+	ctx := p.pingCtx
+
+	p.pingWG.Go(func() {
 		// Do an initial ping immediately after a short delay for the tunnel to establish
-		time.Sleep(2 * time.Second)
+		if !sleep(ctx, 2*time.Second) {
+			return
+		}
 		if p.nodeCount() > 0 {
 			p.Ping(ctx)
 		}
@@ -259,30 +277,70 @@ func (p *Proxy) PingConstantly() {
 			select {
 			case <-ticker.C:
 				// TODO: Handle case where no nodes are available
-				if p.nodeCount() > 0 {
-					success := p.Ping(ctx)
-					if !success {
-						p.logger.Debug("Restarting proxy with different node", slog.String("name", p.Name))
-						p.addEvent("restarting proxy after failed check")
-						err := p.Stop()
-						if err != nil {
-							p.logger.Error("Failed to stop proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
-							p.addEvent("failed to stop tunnel: %v", err)
-						}
-						p.selectNode()
-						err = p.Start()
-						if err != nil {
-							p.logger.Error("Failed to restart proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
-						} else {
-							p.incRestarts()
-						}
-					}
+				if p.nodeCount() == 0 {
+					continue
 				}
+				if p.Ping(ctx) {
+					continue
+				}
+				// Never start a tunnel that Close would no longer stop.
+				if ctx.Err() != nil {
+					return
+				}
+				p.restart()
 			case <-ctx.Done():
 				return
 			}
 		}
-	}()
+	})
+}
+
+// restart replaces the tunnel, moving it to a different node.
+func (p *Proxy) restart() {
+	p.logger.Debug("Restarting proxy with different node", slog.String("name", p.Name))
+	p.addEvent("restarting proxy after failed check")
+
+	if err := p.Stop(); err != nil {
+		p.logger.Error("Failed to stop proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
+		p.addEvent("failed to stop tunnel: %v", err)
+	}
+
+	p.selectNode()
+
+	if err := p.Start(); err != nil {
+		p.logger.Error("Failed to restart proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
+		return
+	}
+
+	p.incRestarts()
+}
+
+// sleep waits for d and reports whether it completed. It returns false as soon
+// as ctx is cancelled.
+func sleep(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// Close stops the health checks and the tunnel. It waits for the check loop to
+// return, so that no tunnel outlives the call.
+func (p *Proxy) Close() error {
+	p.pingerMu.Lock()
+	defer p.pingerMu.Unlock()
+
+	if p.cancelPing != nil {
+		p.cancelPing()
+	}
+	p.pingWG.Wait()
+
+	return p.Stop()
 }
 
 func (p *Proxy) Stop() error {
@@ -296,7 +354,7 @@ func (p *Proxy) Stop() error {
 	pid := p.process.Pid
 	p.logger.Debug("Killing proxy process", slog.String("name", p.Name), slog.Int("pid", pid))
 
-	err := p.process.Kill()
+	err := killProcessTree(p.process)
 	if err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return fmt.Errorf("failed to stop proxy for %s: %v", p.Name, err)
 	}
@@ -304,6 +362,11 @@ func (p *Proxy) Stop() error {
 	p.process = nil
 	p.healthy = false
 	p.addEventLocked("tunnel stopped (pid %d)", pid)
+
+	// Pooled connections reach through the tunnel just killed.
+	if p.pinger != nil {
+		p.pinger.CloseIdleConnections()
+	}
 
 	return nil
 }
@@ -368,11 +431,22 @@ func newPinger(port int) (*http.Client, error) {
 		return nil, err
 	}
 
+	// Dialer.Dial ignores contexts and sets no deadline, so a tunnel that
+	// accepts the connection and then stalls would block the dial forever.
+	contextDialer, ok := dialer.(proxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf("SOCKS5 dialer for port %d does not support contexts", port)
+	}
+
 	// Create a transport that uses the proxy dialer
 	client.Transport = &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialer.Dial(network, addr)
+			ctx, cancel := context.WithTimeout(ctx, dialTimeout)
+			defer cancel()
+
+			return contextDialer.DialContext(ctx, network, addr)
 		},
+		IdleConnTimeout: idleConnTimeout,
 	}
 
 	return client, nil

@@ -192,7 +192,7 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 
 func stopProxies(proxies []*proxy.Proxy) {
 	for _, p := range proxies {
-		err := p.Stop()
+		err := p.Close()
 		if err != nil {
 			// Can't log to TUI anymore, just continue
 			continue
