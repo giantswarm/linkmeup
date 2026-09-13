@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,12 +31,21 @@ var (
 	// idleConnTimeout keeps pooled connections from outliving the tunnel they
 	// were opened through. It must stay below pingInterval.
 	idleConnTimeout = 20 * time.Second
+	// maxRestartBackoff caps how far restart attempts are spaced out.
+	maxRestartBackoff = 15 * time.Minute
+	// nodeLookupTimeout bounds `tsh ls`. The lookup runs in the check loop,
+	// which Close waits for, and tsh can wait on a browser login indefinitely.
+	nodeLookupTimeout = 30 * time.Second
 
 	proxyHost = "localhost"
 )
 
 // Number of events kept per proxy.
 const maxEvents = 20
+
+// lookupNodes resolves a selector to Teleport node names. It is a variable so
+// that tests can stand in for the tsh call.
+var lookupNodes = getNodes
 
 type pingResult struct {
 	success    bool
@@ -81,6 +91,8 @@ type Proxy struct {
 	// List of Teleport node names available for this proxy.
 	// Only one will be used.
 	nodes []string
+	// Selector used to look the nodes up, kept so they can be looked up again
+	selector string
 	// Error returned by the last node lookup, if any
 	nodesErr error
 	// The node actually used for the SSH tunnel
@@ -99,6 +111,10 @@ type Proxy struct {
 	lastStartErr error
 	// Number of tunnel restarts after a failed check
 	restarts int
+	// Restarts since the last successful check, used to space attempts out
+	failedRestarts int
+	// Earliest time the next restart may be attempted
+	nextRestart time.Time
 	// Recent diagnostic events, oldest first
 	events []Event
 
@@ -134,7 +150,7 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 	// Selector for command `tsh ls --format=names ins=MC_NAME,cluster=MC_NAME,role=control-plane`
 	selector := fmt.Sprintf("ins=%s,cluster=%s,role=control-plane", name, name)
 
-	nodes, nodesErr := getNodes(selector)
+	nodes, nodesErr := lookupNodes(context.Background(), selector)
 	switch {
 	case nodesErr != nil:
 		logger.Error("Failed to get nodes for installation", slog.String("selector", selector), slog.String("name", name), slog.String("domain", domain), slog.String("error", nodesErr.Error()))
@@ -157,6 +173,7 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 		CheckEndpoint: checkEndpoint,
 
 		nodes:    nodes,
+		selector: selector,
 		nodesErr: nodesErr,
 		logger:   logger,
 		pinger:   pinger,
@@ -228,8 +245,12 @@ func (p *Proxy) Start() error {
 		return fmt.Errorf("failed to start proxy for %s: no nodes available", p.Name)
 	}
 
-	// Pick a random node
-	node := p.nodes[rand.IntN(len(p.nodes))] //nolint:gosec
+	// Use the node selectNode picked, so that a restart really does move away
+	// from the node that just failed.
+	node := p.nodeActive
+	if node == "" {
+		node = p.nodes[rand.IntN(len(p.nodes))] //nolint:gosec
+	}
 
 	p.logger.Info("Starting proxy", slog.String("name", p.Name), slog.String("domain", p.Domain), slog.String("node", node), slog.Int("port", p.Port))
 	host := fmt.Sprintf("root@node=%s,ins=%s", node, p.Name)
@@ -277,19 +298,17 @@ func (p *Proxy) PingConstantly() {
 
 		for {
 			select {
-			case <-ticker.C:
-				// TODO: Handle case where no nodes are available
-				if p.nodeCount() == 0 {
-					continue
-				}
-				if p.Ping(ctx) {
+			case tick := <-ticker.C:
+				// With no nodes there is nothing to check, but a later lookup
+				// may well find some, so keep attempting restarts.
+				if p.nodeCount() > 0 && p.Ping(ctx) {
 					continue
 				}
 				// Never start a tunnel that Close would no longer stop.
 				if ctx.Err() != nil {
 					return
 				}
-				p.restart()
+				p.maybeRestart(ctx, tick)
 			case <-ctx.Done():
 				return
 			}
@@ -297,16 +316,64 @@ func (p *Proxy) PingConstantly() {
 	})
 }
 
+// maybeRestart restarts the tunnel unless a previous attempt asked for a
+// pause. Retrying a permanently broken installation every pingInterval spawns
+// a tsh process each time, which is how one rolled control plane turns into
+// hundreds of Teleport re-authentication attempts.
+// now is the tick that triggered this attempt, not the wall clock: anchoring on
+// the tick keeps the schedule exact, because the time spent checking varies
+// between an instant refusal and a full pingTimeout stall.
+func (p *Proxy) maybeRestart(ctx context.Context, now time.Time) {
+	p.mu.Lock()
+	if !p.nextRestart.IsZero() && now.Before(p.nextRestart) {
+		wait := p.nextRestart.Sub(now).Round(time.Second)
+		p.mu.Unlock()
+
+		p.logger.Debug("Waiting before the next restart", slog.String("name", p.Name), slog.Duration("wait", wait))
+		return
+	}
+
+	p.failedRestarts++
+	attempt := p.failedRestarts
+	backoff := restartBackoff(attempt)
+	p.nextRestart = now.Add(backoff)
+	p.mu.Unlock()
+
+	p.restart(ctx, attempt, backoff)
+}
+
+// restartBackoff returns how long to wait after n consecutive failed restarts.
+func restartBackoff(n int) time.Duration {
+	const maxShift = 10
+
+	if n < 1 {
+		return pingInterval
+	}
+	if n > maxShift {
+		return maxRestartBackoff
+	}
+
+	backoff := pingInterval << (n - 1)
+	if backoff > maxRestartBackoff {
+		return maxRestartBackoff
+	}
+
+	return backoff
+}
+
 // restart replaces the tunnel, moving it to a different node.
-func (p *Proxy) restart() {
-	p.logger.Debug("Restarting proxy with different node", slog.String("name", p.Name))
-	p.addEvent("restarting proxy after failed check")
+func (p *Proxy) restart(ctx context.Context, attempt int, backoff time.Duration) {
+	p.logger.Debug("Restarting proxy with different node", slog.String("name", p.Name), slog.Int("attempt", attempt))
+	p.addEvent("restart attempt %d; next one no sooner than %s from now", attempt, backoff)
 
 	if err := p.Stop(); err != nil {
 		p.logger.Error("Failed to stop proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
 		p.addEvent("failed to stop tunnel: %v", err)
 	}
 
+	// A rolled control plane leaves every cached node name pointing at nothing,
+	// so look the nodes up again before picking one.
+	p.refreshNodes(ctx)
 	p.selectNode()
 
 	if err := p.Start(); err != nil {
@@ -315,6 +382,45 @@ func (p *Proxy) restart() {
 	}
 
 	p.incRestarts()
+}
+
+// refreshNodes looks the installation's nodes up again. Without this the list
+// read at startup is used forever, and an installation whose nodes are replaced
+// never recovers.
+func (p *Proxy) refreshNodes(ctx context.Context) {
+	nodes, err := lookupNodes(ctx, p.selector)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	switch {
+	case err != nil:
+		p.nodesErr = err
+		p.addEventLocked("node lookup failed: %v", err)
+		return
+	case len(nodes) == 0:
+		p.nodes = nil
+		p.nodeActive = ""
+		p.nodesErr = fmt.Errorf("no nodes matched selector %s", p.selector)
+		p.addEventLocked("node lookup found no nodes")
+		return
+	}
+
+	p.nodesErr = nil
+
+	// selectNode shuffles the list, so compare sorted copies.
+	previous := slices.Sorted(slices.Values(p.nodes))
+	current := slices.Sorted(slices.Values(nodes))
+	if !slices.Equal(previous, current) {
+		p.addEventLocked("node list changed: %d node(s) now available", len(nodes))
+	}
+
+	if p.nodeActive != "" && !slices.Contains(nodes, p.nodeActive) {
+		p.addEventLocked("node %s no longer exists", p.nodeActive)
+		p.nodeActive = ""
+	}
+
+	p.nodes = nodes
 }
 
 // sleep waits for d and reports whether it completed. It returns false as soon
@@ -403,19 +509,26 @@ func (p *Proxy) incRestarts() {
 }
 
 // Returns available Teleport nodes for a given selector.
-func getNodes(selector string) ([]string, error) {
-	cmd := exec.Command("tsh", "ls", "--format=names", selector) //nolint:gosec
+func getNodes(ctx context.Context, selector string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, nodeLookupTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "tsh", "ls", "--format=names", selector) //nolint:gosec
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	if err != nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("node lookup did not finish: %w", ctx.Err())
+	}
 
 	// Get exit code
 	exitCode := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else {
 			// Non-exit error (e.g., command not found)
@@ -426,8 +539,9 @@ func getNodes(selector string) ([]string, error) {
 	stdoutStr := strings.TrimSpace(stdout.String())
 	stderrStr := strings.TrimSpace(stderr.String())
 
-	// Log the results for debugging
-	if exitCode != 0 || stderrStr != "" {
+	// Only the exit code decides. tsh writes warnings to stderr on success,
+	// and treating those as failures would stop the node list ever refreshing.
+	if exitCode != 0 {
 		return nil, fmt.Errorf("command failed with exit code %d, stderr: %s", exitCode, stderrStr)
 	}
 
@@ -529,6 +643,9 @@ func (p *Proxy) recordPingResult(result *pingResult) {
 	p.lastCheck = time.Now()
 
 	if result.success {
+		p.failedRestarts = 0
+		p.nextRestart = time.Time{}
+
 		if !wasHealthy || isFirst {
 			p.logger.Info("Proxy changed to healthy", slog.String("name", p.Name), slog.String("domain", p.Domain))
 			p.addEventLocked("check succeeded: %s", result.describe())
