@@ -18,7 +18,8 @@ func fakeTSH(t *testing.T, script string) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tsh")
 
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o700); err != nil {
+	// Executable on purpose: this file stands in for the tsh binary.
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o700); err != nil { //nolint:gosec
 		t.Fatalf("failed to write the fake tsh: %v", err)
 	}
 
