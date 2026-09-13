@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - An installation whose control plane nodes are replaced now recovers. The node list was previously read once at startup and never refreshed, so every restart kept targeting nodes that no longer existed.
+- The node lookup no longer treats anything `tsh` writes to stderr as a failure. A warning alongside a successful lookup used to discard the result.
+- The node lookup is bounded by a 30 second timeout and stops when linkmeup shuts down, so a `tsh` waiting on a browser login cannot hold up quitting.
 - A restart now really does move to the node `selectNode` picked. `Start` chose a random node instead, which could land on the node that had just failed.
 - A proxy that starts with no nodes available now keeps looking for them, rather than staying idle until linkmeup is restarted.
 

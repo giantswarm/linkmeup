@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"strings"
@@ -13,7 +14,7 @@ func stubNodes(t *testing.T, nodes []string, err error) {
 	t.Helper()
 
 	previous := lookupNodes
-	lookupNodes = func(string) ([]string, error) { return nodes, err }
+	lookupNodes = func(context.Context, string) ([]string, error) { return nodes, err }
 	t.Cleanup(func() { lookupNodes = previous })
 }
 
@@ -67,7 +68,7 @@ func TestMaybeRestartWaitsForBackoff(t *testing.T) {
 	p := testProxy("glean-bkznm")
 	p.nextRestart = time.Now().Add(time.Hour)
 
-	p.maybeRestart()
+	p.maybeRestart(context.Background(), time.Now())
 
 	if p.failedRestarts != 0 {
 		t.Errorf("failedRestarts = %d, want 0: the attempt should have been skipped", p.failedRestarts)
@@ -83,7 +84,7 @@ func TestRefreshNodesPicksUpReplacedNodes(t *testing.T) {
 	replacements := []string{"glean-bkznm", "glean-nc655", "glean-r8srn"}
 	stubNodes(t, replacements, nil)
 
-	p.refreshNodes()
+	p.refreshNodes(context.Background())
 
 	status := p.Status()
 	if len(status.Nodes) != len(replacements) {
@@ -107,7 +108,7 @@ func TestRefreshNodesKeepsLiveActiveNode(t *testing.T) {
 
 	stubNodes(t, []string{"elver-2zcm5", "elver-h2t2d"}, nil)
 
-	p.refreshNodes()
+	p.refreshNodes(context.Background())
 
 	if p.nodeActive != "elver-2zcm5" {
 		t.Errorf("nodeActive = %q, want it kept", p.nodeActive)
@@ -124,7 +125,7 @@ func TestRefreshNodesIgnoresReordering(t *testing.T) {
 
 	stubNodes(t, []string{"c", "a", "b"}, nil)
 
-	p.refreshNodes()
+	p.refreshNodes(context.Background())
 
 	if hasEvent(p, "node list changed") {
 		t.Error("a reordered but otherwise identical list should not count as a change")
@@ -137,7 +138,7 @@ func TestRefreshNodesKeepsNodesWhenLookupFails(t *testing.T) {
 
 	stubNodes(t, nil, io.ErrUnexpectedEOF)
 
-	p.refreshNodes()
+	p.refreshNodes(context.Background())
 
 	if len(p.Status().Nodes) != 1 {
 		t.Errorf("got %d nodes, want the known one kept", len(p.Status().Nodes))
@@ -161,5 +162,69 @@ func TestSuccessfulCheckResetsBackoff(t *testing.T) {
 	}
 	if !p.nextRestart.IsZero() {
 		t.Errorf("nextRestart = %v, want it cleared", p.nextRestart)
+	}
+}
+
+// The node lookup runs inside the check loop, which Close waits for. If it
+// ignored the loop's context, a lookup waiting on a Teleport browser login
+// would keep Close from ever returning, and every tunnel would survive.
+func TestRestartAbandonsNodeLookupWhenCancelled(t *testing.T) {
+	started := make(chan struct{})
+
+	previous := lookupNodes
+	lookupNodes = func(ctx context.Context, _ string) ([]string, error) {
+		close(started)
+		<-ctx.Done()
+
+		return nil, ctx.Err()
+	}
+	t.Cleanup(func() { lookupNodes = previous })
+
+	// No nodes, so the restart cannot go on to launch a real tunnel.
+	p := testProxy()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.maybeRestart(ctx, time.Now())
+	}()
+
+	<-started
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("restart kept waiting on the node lookup after the context was cancelled")
+	}
+}
+
+// Attempts are scheduled against the check tick, not the wall clock, so the
+// time a check spends failing does not stretch the documented schedule.
+func TestBackoffFollowsTickSchedule(t *testing.T) {
+	stubNodes(t, nil, io.ErrUnexpectedEOF)
+
+	// No nodes, so the restart cannot go on to launch a real tunnel.
+	p := testProxy()
+	ctx := context.Background()
+	tick := time.Now()
+
+	p.maybeRestart(ctx, tick)
+	if p.failedRestarts != 1 {
+		t.Fatalf("failedRestarts = %d after the first attempt, want 1", p.failedRestarts)
+	}
+
+	// Exactly one interval later. The first attempt asked for pingInterval, so
+	// this must proceed however long the checks in between took.
+	p.maybeRestart(ctx, tick.Add(pingInterval))
+	if p.failedRestarts != 2 {
+		t.Errorf("failedRestarts = %d one interval later, want 2", p.failedRestarts)
+	}
+
+	// The second attempt asked for a minute, so half an interval on is early.
+	p.maybeRestart(ctx, tick.Add(pingInterval+pingInterval/2))
+	if p.failedRestarts != 2 {
+		t.Errorf("failedRestarts = %d, want the early attempt skipped", p.failedRestarts)
 	}
 }

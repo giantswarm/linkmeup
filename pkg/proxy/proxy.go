@@ -33,6 +33,9 @@ var (
 	idleConnTimeout = 20 * time.Second
 	// maxRestartBackoff caps how far restart attempts are spaced out.
 	maxRestartBackoff = 15 * time.Minute
+	// nodeLookupTimeout bounds `tsh ls`. The lookup runs in the check loop,
+	// which Close waits for, and tsh can wait on a browser login indefinitely.
+	nodeLookupTimeout = 30 * time.Second
 
 	proxyHost = "localhost"
 )
@@ -147,7 +150,7 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 	// Selector for command `tsh ls --format=names ins=MC_NAME,cluster=MC_NAME,role=control-plane`
 	selector := fmt.Sprintf("ins=%s,cluster=%s,role=control-plane", name, name)
 
-	nodes, nodesErr := lookupNodes(selector)
+	nodes, nodesErr := lookupNodes(context.Background(), selector)
 	switch {
 	case nodesErr != nil:
 		logger.Error("Failed to get nodes for installation", slog.String("selector", selector), slog.String("name", name), slog.String("domain", domain), slog.String("error", nodesErr.Error()))
@@ -295,7 +298,7 @@ func (p *Proxy) PingConstantly() {
 
 		for {
 			select {
-			case <-ticker.C:
+			case tick := <-ticker.C:
 				// With no nodes there is nothing to check, but a later lookup
 				// may well find some, so keep attempting restarts.
 				if p.nodeCount() > 0 && p.Ping(ctx) {
@@ -305,7 +308,7 @@ func (p *Proxy) PingConstantly() {
 				if ctx.Err() != nil {
 					return
 				}
-				p.maybeRestart()
+				p.maybeRestart(ctx, tick)
 			case <-ctx.Done():
 				return
 			}
@@ -317,10 +320,13 @@ func (p *Proxy) PingConstantly() {
 // pause. Retrying a permanently broken installation every pingInterval spawns
 // a tsh process each time, which is how one rolled control plane turns into
 // hundreds of Teleport re-authentication attempts.
-func (p *Proxy) maybeRestart() {
+// now is the tick that triggered this attempt, not the wall clock: anchoring on
+// the tick keeps the schedule exact, because the time spent checking varies
+// between an instant refusal and a full pingTimeout stall.
+func (p *Proxy) maybeRestart(ctx context.Context, now time.Time) {
 	p.mu.Lock()
-	if !p.nextRestart.IsZero() && time.Now().Before(p.nextRestart) {
-		wait := time.Until(p.nextRestart).Round(time.Second)
+	if !p.nextRestart.IsZero() && now.Before(p.nextRestart) {
+		wait := p.nextRestart.Sub(now).Round(time.Second)
 		p.mu.Unlock()
 
 		p.logger.Debug("Waiting before the next restart", slog.String("name", p.Name), slog.Duration("wait", wait))
@@ -330,10 +336,10 @@ func (p *Proxy) maybeRestart() {
 	p.failedRestarts++
 	attempt := p.failedRestarts
 	backoff := restartBackoff(attempt)
-	p.nextRestart = time.Now().Add(backoff)
+	p.nextRestart = now.Add(backoff)
 	p.mu.Unlock()
 
-	p.restart(attempt, backoff)
+	p.restart(ctx, attempt, backoff)
 }
 
 // restartBackoff returns how long to wait after n consecutive failed restarts.
@@ -356,7 +362,7 @@ func restartBackoff(n int) time.Duration {
 }
 
 // restart replaces the tunnel, moving it to a different node.
-func (p *Proxy) restart(attempt int, backoff time.Duration) {
+func (p *Proxy) restart(ctx context.Context, attempt int, backoff time.Duration) {
 	p.logger.Debug("Restarting proxy with different node", slog.String("name", p.Name), slog.Int("attempt", attempt))
 	p.addEvent("restart attempt %d; next one no sooner than %s from now", attempt, backoff)
 
@@ -367,7 +373,7 @@ func (p *Proxy) restart(attempt int, backoff time.Duration) {
 
 	// A rolled control plane leaves every cached node name pointing at nothing,
 	// so look the nodes up again before picking one.
-	p.refreshNodes()
+	p.refreshNodes(ctx)
 	p.selectNode()
 
 	if err := p.Start(); err != nil {
@@ -381,8 +387,8 @@ func (p *Proxy) restart(attempt int, backoff time.Duration) {
 // refreshNodes looks the installation's nodes up again. Without this the list
 // read at startup is used forever, and an installation whose nodes are replaced
 // never recovers.
-func (p *Proxy) refreshNodes() {
-	nodes, err := lookupNodes(p.selector)
+func (p *Proxy) refreshNodes(ctx context.Context) {
+	nodes, err := lookupNodes(ctx, p.selector)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -503,19 +509,26 @@ func (p *Proxy) incRestarts() {
 }
 
 // Returns available Teleport nodes for a given selector.
-func getNodes(selector string) ([]string, error) {
-	cmd := exec.Command("tsh", "ls", "--format=names", selector) //nolint:gosec
+func getNodes(ctx context.Context, selector string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, nodeLookupTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "tsh", "ls", "--format=names", selector) //nolint:gosec
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	if err != nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("node lookup did not finish: %w", ctx.Err())
+	}
 
 	// Get exit code
 	exitCode := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else {
 			// Non-exit error (e.g., command not found)
@@ -526,8 +539,9 @@ func getNodes(selector string) ([]string, error) {
 	stdoutStr := strings.TrimSpace(stdout.String())
 	stderrStr := strings.TrimSpace(stderr.String())
 
-	// Log the results for debugging
-	if exitCode != 0 || stderrStr != "" {
+	// Only the exit code decides. tsh writes warnings to stderr on success,
+	// and treating those as failures would stop the node list ever refreshing.
+	if exitCode != 0 {
 		return nil, fmt.Errorf("command failed with exit code %d, stderr: %s", exitCode, stderrStr)
 	}
 
