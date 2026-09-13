@@ -85,11 +85,10 @@ type Proxy struct {
 	nodesErr error
 	// The node actually used for the SSH tunnel
 	nodeActive string
-	// SSH tunnel Teleport process
-	process *os.Process
-	// processDone is closed once process has exited and been reaped. Its PID
-	// may be recycled from that moment on, so it must not be signalled.
-	processDone chan struct{}
+	// SSH tunnel Teleport command. Nothing reaps it but Stop, so between the
+	// tunnel exiting and Stop running it is an unreaped zombie that still owns
+	// its PID.
+	cmd *exec.Cmd
 	// Healthy determines if the proxy is healthy
 	healthy bool
 	// Last ping result
@@ -244,16 +243,10 @@ func (p *Proxy) Start() error {
 		return p.lastStartErr
 	}
 
-	// Reap the child once it exits. Without a Wait, every restarted tunnel
-	// stays around as a zombie for the lifetime of linkmeup.
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = cmd.Wait()
-	}()
-
-	p.process = cmd.Process
-	p.processDone = done
+	// The tunnel is reaped by Stop rather than here. Leaving it unreaped keeps
+	// its PID allocated, which is what makes killing its process group safe;
+	// Stop runs before every restart, so at most one zombie exists per proxy.
+	p.cmd = cmd
 	p.nodeActive = node
 	p.lastStartErr = nil
 	p.addEventLocked("tunnel started on node %s (pid %d)", node, cmd.Process.Pid)
@@ -353,29 +346,39 @@ func (p *Proxy) Close() error {
 }
 
 func (p *Proxy) Stop() error {
+	cmd, err := p.killTunnel()
+	if cmd == nil {
+		return err
+	}
+
+	// Reap outside the lock. Wait can block, and the TUI reads status meanwhile.
+	_ = cmd.Wait()
+
+	return err
+}
+
+// killTunnel signals the tunnel under the lock and hands the command back to
+// be reaped. It returns a nil command when there is nothing running.
+func (p *Proxy) killTunnel() (*exec.Cmd, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.process == nil {
-		return nil // Nothing to stop
+	if p.cmd == nil {
+		return nil, nil // Nothing to stop
 	}
 
-	pid := p.process.Pid
+	cmd := p.cmd
+	pid := cmd.Process.Pid
 	p.logger.Debug("Killing proxy process", slog.String("name", p.Name), slog.Int("pid", pid))
 
-	select {
-	case <-p.processDone:
-		// The tunnel exited on its own and has been reaped. Its PID may belong
-		// to an unrelated process by now, so there is nothing safe to signal.
-	default:
-		err := killProcessTree(p.process)
-		if err != nil && !errors.Is(err, os.ErrProcessDone) {
-			return fmt.Errorf("failed to stop proxy for %s: %v", p.Name, err)
-		}
+	err := killProcessTree(cmd.Process)
+	if err != nil && !errors.Is(err, os.ErrProcessDone) {
+		err = fmt.Errorf("failed to stop proxy for %s: %v", p.Name, err)
+	} else {
+		err = nil
 	}
 
-	p.process = nil
-	p.processDone = nil
+	p.cmd = nil
 	p.healthy = false
 	p.addEventLocked("tunnel stopped (pid %d)", pid)
 
@@ -384,7 +387,7 @@ func (p *Proxy) Stop() error {
 		p.pinger.CloseIdleConnections()
 	}
 
-	return nil
+	return cmd, err
 }
 
 func (p *Proxy) nodeCount() int {
@@ -612,8 +615,8 @@ func (p *Proxy) Status() ProxyStatus {
 			status.LastError = p.lastPingResult.err.Error()
 		}
 	}
-	if p.process != nil {
-		status.PID = p.process.Pid
+	if p.cmd != nil {
+		status.PID = p.cmd.Process.Pid
 	}
 
 	return status
