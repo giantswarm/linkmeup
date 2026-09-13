@@ -16,8 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Release binaries now include darwin/amd64, darwin/arm64, windows/amd64, and windows/arm64 alongside the existing linux targets. Windows binaries are named `template-windows-<arch>.exe`.
+- Restart attempts for a failing proxy now back off, from 30 seconds up to 15 minutes, instead of repeating every 30 seconds indefinitely. Each attempt runs `tsh ssh`, which opens a browser tab for Teleport re-authentication when it fails, so a permanently broken installation used to produce roughly 120 tabs an hour.
 
 ### Fixed
+
+- An installation whose control plane nodes are replaced now recovers. The node list was previously read once at startup and never refreshed, so every restart kept targeting nodes that no longer existed.
+- A restart now really does move to the node `selectNode` picked. `Start` chose a random node instead, which could land on the node that had just failed.
+- A proxy that starts with no nodes available now keeps looking for them, rather than staying idle until linkmeup is restarted.
 
 - Health checks no longer leak a goroutine and a socket per check when a tunnel accepts connections but stalls during the SOCKS5 handshake. The dial now honors the context and times out after 10 seconds.
 - Pooled connections are dropped when a tunnel is stopped, instead of lingering until they are used again.

@@ -33,4 +33,4 @@ Hit Ctrl + C to stop the program.
 
 ## Limitations
 
-- In some cases, linkmeup may cause the opening of several browser tabs for Teleport re-authentication. We still have to investigate if we can avoid this.
+- A tunnel that cannot be established makes `tsh` attempt Teleport re-authentication, which opens a browser tab. linkmeup now spaces restart attempts out, up to 15 minutes apart, so a broken installation produces a handful of tabs an hour rather than a stream of them. Suppressing them entirely needs a `tsh` flag that currently does not work (`--no-relogin` consumes the target host in Teleport v18).
