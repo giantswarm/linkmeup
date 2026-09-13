@@ -4,9 +4,37 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
+
+// socksPackage appears in the stack of every goroutine inside the SOCKS5 dial.
+const socksPackage = "golang.org/x/net/internal/socks"
+
+// dialGoroutines counts the goroutines currently in the SOCKS5 dial path.
+// Counting those instead of every goroutine in the process keeps the result
+// independent of the GC workers and of whatever other tests are running.
+func dialGoroutines() int {
+	buf := make([]byte, 64<<10)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+
+	count := 0
+	for _, stack := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(stack, socksPackage) {
+			count++
+		}
+	}
+
+	return count
+}
 
 // stalledTunnel listens on a free port, accepts every connection and then stays
 // silent. It stands in for a tunnel whose SOCKS5 handshake never completes.
@@ -47,11 +75,9 @@ func stalledTunnel(t *testing.T) int {
 func TestPingerDialTimesOut(t *testing.T) {
 	port := stalledTunnel(t)
 
-	previous := dialTimeout
-	dialTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { dialTimeout = previous })
+	const timeout = 200 * time.Millisecond
 
-	client, err := newPinger(port)
+	client, err := newPinger(port, timeout)
 	if err != nil {
 		t.Fatalf("newPinger() returned an error: %v", err)
 	}
@@ -76,12 +102,8 @@ func TestPingerDialTimesOut(t *testing.T) {
 	}
 
 	if elapsed := request(); elapsed > time.Second {
-		t.Errorf("dial took %s, want it bounded by the %s dial timeout", elapsed, dialTimeout)
+		t.Errorf("dial took %s, want it bounded by the %s dial timeout", elapsed, timeout)
 	}
-
-	// The first request warms the transport up, so one-off goroutines count
-	// towards the baseline rather than towards the leak.
-	baseline := runtime.NumGoroutine()
 
 	const attempts = 5
 	for range attempts {
@@ -89,12 +111,12 @@ func TestPingerDialTimesOut(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
-	for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
+	for dialGoroutines() > 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	if leaked := runtime.NumGoroutine() - baseline; leaked > 0 {
-		t.Errorf("%d goroutine(s) still running after %d stalled dials, want none", leaked, attempts)
+	if leaked := dialGoroutines(); leaked > 0 {
+		t.Errorf("%d goroutine(s) still in the dial path after %d stalled dials, want none", leaked, attempts)
 	}
 }
 

@@ -18,10 +18,18 @@ func setProcessGroup(cmd *exec.Cmd) {
 // killProcessTree kills the process and everything it spawned. Killing only
 // the tunnel process would leave its children behind as orphans.
 func killProcessTree(p *os.Process) error {
-	err := syscall.Kill(-p.Pid, syscall.SIGKILL)
-	if err == nil || errors.Is(err, syscall.ESRCH) {
-		return nil
+	// Signal the leader through its os.Process handle, which refuses to touch
+	// a process that has already been reaped. Signalling the raw PID would
+	// give that up, and the PID may by then belong to something else.
+	if err := p.Kill(); err != nil {
+		return err
 	}
 
-	return p.Kill()
+	// The leader is dead but not yet reaped, so the PID is still ours and the
+	// group ID with it. Take the remaining members along.
+	if err := syscall.Kill(-p.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+
+	return nil
 }

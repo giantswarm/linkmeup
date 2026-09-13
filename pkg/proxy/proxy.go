@@ -87,6 +87,9 @@ type Proxy struct {
 	nodeActive string
 	// SSH tunnel Teleport process
 	process *os.Process
+	// processDone is closed once process has exited and been reaped. Its PID
+	// may be recycled from that moment on, so it must not be signalled.
+	processDone chan struct{}
 	// Healthy determines if the proxy is healthy
 	healthy bool
 	// Last ping result
@@ -143,7 +146,7 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 
 	logger.Debug("Nodes for installation", slog.String("selector", selector), slog.Int("count", len(nodes)), slog.String("name", name), slog.String("nodes", strings.Join(nodes, ", ")))
 
-	pinger, err := newPinger(port)
+	pinger, err := newPinger(port, dialTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pinger for proxy %s: %v", name, err)
 	}
@@ -243,11 +246,14 @@ func (p *Proxy) Start() error {
 
 	// Reap the child once it exits. Without a Wait, every restarted tunnel
 	// stays around as a zombie for the lifetime of linkmeup.
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		_ = cmd.Wait()
 	}()
 
 	p.process = cmd.Process
+	p.processDone = done
 	p.nodeActive = node
 	p.lastStartErr = nil
 	p.addEventLocked("tunnel started on node %s (pid %d)", node, cmd.Process.Pid)
@@ -259,6 +265,9 @@ func (p *Proxy) PingConstantly() {
 	p.pingerMu.Lock()
 	defer p.pingerMu.Unlock()
 
+	if p.pingCtx == nil {
+		p.pingCtx, p.cancelPing = context.WithCancel(context.Background())
+	}
 	ctx := p.pingCtx
 
 	p.pingWG.Go(func() {
@@ -354,12 +363,19 @@ func (p *Proxy) Stop() error {
 	pid := p.process.Pid
 	p.logger.Debug("Killing proxy process", slog.String("name", p.Name), slog.Int("pid", pid))
 
-	err := killProcessTree(p.process)
-	if err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return fmt.Errorf("failed to stop proxy for %s: %v", p.Name, err)
+	select {
+	case <-p.processDone:
+		// The tunnel exited on its own and has been reaped. Its PID may belong
+		// to an unrelated process by now, so there is nothing safe to signal.
+	default:
+		err := killProcessTree(p.process)
+		if err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return fmt.Errorf("failed to stop proxy for %s: %v", p.Name, err)
+		}
 	}
 
 	p.process = nil
+	p.processDone = nil
 	p.healthy = false
 	p.addEventLocked("tunnel stopped (pid %d)", pid)
 
@@ -420,7 +436,7 @@ func getNodes(selector string) ([]string, error) {
 	return strings.Split(stdoutStr, "\n"), nil
 }
 
-func newPinger(port int) (*http.Client, error) {
+func newPinger(port int, dialTimeout time.Duration) (*http.Client, error) {
 	client := &http.Client{
 		Timeout: pingTimeout,
 	}

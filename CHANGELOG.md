@@ -21,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Health checks no longer leak a goroutine and a socket per check when a tunnel accepts connections but stalls during the SOCKS5 handshake. The dial now honors the context and times out after 10 seconds.
 - Pooled connections are dropped when a tunnel is stopped, instead of lingering until they are used again.
-- Stopping a tunnel now kills the whole `tsh` process group, so child processes no longer survive as orphans.
-- Quitting no longer leaves a tunnel behind when a health check restarts a proxy during shutdown.
+- Stopping a tunnel now kills the whole `tsh` process group on Unix, so child processes no longer survive as orphans. On Windows, only the `tsh` process itself is killed, as before.
+- Quitting no longer leaves a tunnel behind when a health check restarts a proxy during shutdown, or when starting one proxy fails after others are already running.
 
 ## [0.5.0] - 2026-04-01
 

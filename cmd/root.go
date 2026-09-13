@@ -202,19 +202,22 @@ func stopProxies(proxies []*proxy.Proxy) {
 
 // Starts a Teleport port-forward process for each entry in privateInstallations.
 func startProxies() ([]*proxy.Proxy, error) {
-	proxies := make([]*proxy.Proxy, 0, len(config.Installations))
+	started := make([]*proxy.Proxy, 0, len(config.Installations))
 	for _, inst := range config.Installations {
 		checkEndpoint := fmt.Sprintf("https://happaapi.%s/healthz", inst.Domain)
 		p, err := proxy.New(logger, inst.Name, inst.Domain, checkEndpoint)
 		if err != nil {
+			// proxy.New starts a tunnel, so the ones already created would
+			// keep running after this error reaches the caller.
+			stopProxies(started)
 			return nil, fmt.Errorf("failed to start proxy for %s: %w", inst.Name, err)
 		}
 
 		p.PingConstantly()
 
-		proxies = append(proxies, p)
+		started = append(started, p)
 	}
-	return proxies, nil
+	return started, nil
 }
 
 func startWebserver(proxies []*proxy.Proxy) error {
