@@ -32,7 +32,7 @@ func fakeTSH(t *testing.T, script string) {
 func TestGetNodesIgnoresStderrOnSuccess(t *testing.T) {
 	fakeTSH(t, "echo 'WARNING: cluster hint' >&2\nprintf 'node-a\\nnode-b\\n'\nexit 0\n")
 
-	nodes, err := getNodes(context.Background(), "ins=glean")
+	nodes, err := getNodes(context.Background(), "ins=mycluster")
 	if err != nil {
 		t.Fatalf("getNodes() returned an error for a successful lookup: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestGetNodesIgnoresStderrOnSuccess(t *testing.T) {
 func TestGetNodesReportsFailure(t *testing.T) {
 	fakeTSH(t, "echo 'access denied' >&2\nexit 1\n")
 
-	nodes, err := getNodes(context.Background(), "ins=glean")
+	nodes, err := getNodes(context.Background(), "ins=mycluster")
 	if err == nil {
 		t.Fatalf("getNodes() returned %v, want an error", nodes)
 	}
@@ -66,7 +66,7 @@ func TestGetNodesHonoursContext(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		_, err := getNodes(ctx, "ins=glean")
+		_, err := getNodes(ctx, "ins=mycluster")
 		done <- err
 	}()
 
