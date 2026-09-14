@@ -621,7 +621,8 @@ func (p *Proxy) Ping(ctx context.Context) bool {
 			_ = resp.Body.Close()
 		}
 		result.statusCode = resp.StatusCode
-		result.success = resp.StatusCode >= 200 && resp.StatusCode < 500
+		// Only 2xx counts as healthy; redirects are already followed by the client.
+		result.success = resp.StatusCode >= 200 && resp.StatusCode < 300
 	}
 
 	p.recordPingResult(result)

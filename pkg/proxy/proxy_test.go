@@ -1,6 +1,9 @@
 package proxy
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"runtime"
@@ -126,5 +129,49 @@ func TestCloseWithoutPingLoop(t *testing.T) {
 
 	if err := p.Close(); err != nil {
 		t.Errorf("Close() returned an error: %v", err)
+	}
+}
+
+// stubTransport answers every request with a fixed status code.
+type stubTransport struct{ status int }
+
+func (t stubTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: t.status,
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    req,
+	}, nil
+}
+
+// Only a 2xx proves the check endpoint answered. A gateway with no route for
+// the hostname replies 404, so treating any non-5xx as healthy would report a
+// proxy pointing at a vanished endpoint as up.
+func TestPingTreatsOnlySuccessAsHealthy(t *testing.T) {
+	tests := []struct {
+		status int
+		want   bool
+	}{
+		{200, true},
+		{204, true},
+		{301, false},
+		{401, false},
+		{404, false},
+		{500, false},
+		{503, false},
+	}
+
+	for _, tc := range tests {
+		p := &Proxy{
+			Name:          "test",
+			Domain:        "example.com",
+			CheckEndpoint: "https://example.com/healthz",
+			nodes:         []string{"node-1"},
+			logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+			pinger:        &http.Client{Transport: stubTransport{status: tc.status}},
+		}
+
+		if got := p.Ping(context.Background()); got != tc.want {
+			t.Errorf("Ping() with HTTP %d = %v, want %v", tc.status, got, tc.want)
+		}
 	}
 }
