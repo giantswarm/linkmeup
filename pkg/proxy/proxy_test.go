@@ -1,6 +1,9 @@
 package proxy
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"runtime"
@@ -126,5 +129,76 @@ func TestCloseWithoutPingLoop(t *testing.T) {
 
 	if err := p.Close(); err != nil {
 		t.Errorf("Close() returned an error: %v", err)
+	}
+}
+
+// stubTransport answers every request with a fixed status code.
+type stubTransport struct{ status int }
+
+func (t stubTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: t.status,
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    req,
+	}, nil
+}
+
+// Only a 2xx proves the check endpoint answered. A gateway with no route for
+// the hostname replies 404, so treating any non-5xx as healthy would report a
+// proxy pointing at a vanished endpoint as up.
+func TestPingTreatsOnlySuccessAsHealthy(t *testing.T) {
+	tests := []struct {
+		status int
+		want   bool
+	}{
+		{200, true},
+		{204, true},
+		{301, false},
+		{401, false},
+		{404, false},
+		{500, false},
+		{503, false},
+	}
+
+	for _, tc := range tests {
+		p := &Proxy{
+			Name:          "test",
+			Domain:        "example.com",
+			CheckEndpoint: "https://example.com/healthz",
+			nodes:         []string{"node-1"},
+			logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+			pinger:        &http.Client{Transport: stubTransport{status: tc.status}},
+		}
+
+		if got := p.Ping(context.Background()).success; got != tc.want {
+			t.Errorf("Ping() with HTTP %d = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+// A restart moves the tunnel to another node and drops every connection on the
+// port. That can only help when the check got no answer, or an answer the
+// server itself called an error; a 404 from a gateway with no matching route
+// proves the tunnel works, and no restart will bring the route back.
+func TestRestartOnlyWhenTunnelIsSuspect(t *testing.T) {
+	tests := []struct {
+		name   string
+		result pingResult
+		want   bool
+	}{
+		{name: "transport error", result: pingResult{err: io.ErrUnexpectedEOF}, want: true},
+		{name: "no nodes", result: pingResult{}, want: true},
+		{name: "server error", result: pingResult{statusCode: 500}, want: true},
+		{name: "gateway unavailable", result: pingResult{statusCode: 503}, want: true},
+		{name: "route missing", result: pingResult{statusCode: 404}, want: false},
+		{name: "unauthorised", result: pingResult{statusCode: 401}, want: false},
+		{name: "redirect", result: pingResult{statusCode: 301}, want: false},
+		{name: "healthy", result: pingResult{success: true, statusCode: 200}, want: false},
+	}
+
+	for _, tc := range tests {
+		if got := tc.result.restartMayHelp(); got != tc.want {
+			t.Errorf("%s: restartMayHelp() = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

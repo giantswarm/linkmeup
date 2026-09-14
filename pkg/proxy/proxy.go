@@ -54,6 +54,13 @@ type pingResult struct {
 	duration   time.Duration
 }
 
+// restartMayHelp reports whether replacing the tunnel could plausibly change
+// the outcome. Any response at all proves the tunnel carried the request, so
+// only a missing answer or a server error qualifies.
+func (r *pingResult) restartMayHelp() bool {
+	return r.statusCode == 0 || r.statusCode >= 500
+}
+
 // describe renders the ping outcome as a single human readable line.
 func (r *pingResult) describe() string {
 	parts := make([]string, 0, 2)
@@ -301,8 +308,13 @@ func (p *Proxy) PingConstantly() {
 			case tick := <-ticker.C:
 				// With no nodes there is nothing to check, but a later lookup
 				// may well find some, so keep attempting restarts.
-				if p.nodeCount() > 0 && p.Ping(ctx) {
-					continue
+				if p.nodeCount() > 0 {
+					// An answer of any kind proves the tunnel carried the
+					// request, so restarting it would drop live connections
+					// without changing the next result.
+					if !p.Ping(ctx).restartMayHelp() {
+						continue
+					}
 				}
 				// Never start a tunnel that Close would no longer stop.
 				if ctx.Err() != nil {
@@ -587,10 +599,10 @@ func newPinger(port int, dialTimeout time.Duration) (*http.Client, error) {
 
 // Ping performs a GET request to the root URL of the provided host.
 // It returns information about the success, response code, any errors, and the duration.
-func (p *Proxy) Ping(ctx context.Context) bool {
+func (p *Proxy) Ping(ctx context.Context) *pingResult {
 	result := &pingResult{}
 	if p.nodeCount() == 0 {
-		return false
+		return result
 	}
 
 	// Ensure the URL has a scheme
@@ -605,7 +617,7 @@ func (p *Proxy) Ping(ctx context.Context) bool {
 		p.logger.Error("Failed to create ping request", slog.String("name", p.Name), slog.String("domain", p.Domain), slog.String("error", err.Error()))
 		result.err = fmt.Errorf("failed to create request: %w", err)
 		p.recordPingResult(result)
-		return false
+		return result
 	}
 
 	// Execute the request with timing
@@ -621,12 +633,13 @@ func (p *Proxy) Ping(ctx context.Context) bool {
 			_ = resp.Body.Close()
 		}
 		result.statusCode = resp.StatusCode
-		result.success = resp.StatusCode >= 200 && resp.StatusCode < 500
+		// Only 2xx counts as healthy; redirects are already followed by the client.
+		result.success = resp.StatusCode >= 200 && resp.StatusCode < 300
 	}
 
 	p.recordPingResult(result)
 
-	return result.success
+	return result
 }
 
 // recordPingResult stores the outcome of a ping and records an event for every

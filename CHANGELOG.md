@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Release binaries now include darwin/amd64, darwin/arm64, windows/amd64, and windows/arm64 alongside the existing linux targets. Windows binaries are named `template-windows-<arch>.exe`.
+- Health checks now only treat an HTTP 2xx response as healthy, instead of anything below 500. A gateway with no route for the check hostname answers 404, which used to be reported as a healthy proxy.
+- A failing check only restarts the tunnel when the check got no answer or a 5xx. An answer of any other kind proves the tunnel works, so the proxy is now marked unhealthy without being torn down and moved to another node.
 - Restart attempts for a failing proxy now back off, from 30 seconds up to 15 minutes, instead of repeating every 30 seconds indefinitely. Each attempt runs `tsh ssh`, which opens a browser tab for Teleport re-authentication when it fails, so a permanently broken installation used to produce roughly 120 tabs an hour.
 
 ### Fixed
