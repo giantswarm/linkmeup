@@ -9,10 +9,11 @@ import (
 	"time"
 )
 
-// Node names used across the tests below.
+// Node names used across the tests below. Teleport names a node
+// <installation>-<suffix>; these name no real installation.
 const (
-	nodeGlean = "glean-bkznm"
-	nodeElver = "elver-2zcm5"
+	nodeStale = "mycluster-stale"
+	nodeLive  = "mycluster-live"
 )
 
 // stubNodes makes the node lookup return a fixed answer for the duration of a test.
@@ -26,9 +27,9 @@ func stubNodes(t *testing.T, nodes []string, err error) {
 
 func testProxy(nodes ...string) *Proxy {
 	return &Proxy{
-		Name:     "glean",
-		Domain:   "glean.example.com",
-		selector: "ins=glean,cluster=glean,role=control-plane",
+		Name:     "mycluster",
+		Domain:   "mybase.example.com",
+		selector: "ins=mycluster,cluster=mycluster,role=control-plane",
 		nodes:    nodes,
 		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -71,7 +72,7 @@ func TestRestartBackoff(t *testing.T) {
 
 // maybeRestart must do nothing while a previous attempt's pause is still running.
 func TestMaybeRestartWaitsForBackoff(t *testing.T) {
-	p := testProxy(nodeGlean)
+	p := testProxy(nodeLive)
 	p.nextRestart = time.Now().Add(time.Hour)
 
 	p.maybeRestart(context.Background(), time.Now())
@@ -84,10 +85,10 @@ func TestMaybeRestartWaitsForBackoff(t *testing.T) {
 // The incident this came from: an installation's control plane is replaced, so
 // every cached node name points at nothing.
 func TestRefreshNodesPicksUpReplacedNodes(t *testing.T) {
-	p := testProxy("glean-sq67r")
-	p.nodeActive = "glean-sq67r"
+	p := testProxy(nodeStale)
+	p.nodeActive = nodeStale
 
-	replacements := []string{nodeGlean, "glean-nc655", "glean-r8srn"}
+	replacements := []string{"mycluster-new1", "mycluster-new2", "mycluster-new3"}
 	stubNodes(t, replacements, nil)
 
 	p.refreshNodes(context.Background())
@@ -109,14 +110,14 @@ func TestRefreshNodesPicksUpReplacedNodes(t *testing.T) {
 
 // A node that is still present must keep being used.
 func TestRefreshNodesKeepsLiveActiveNode(t *testing.T) {
-	p := testProxy(nodeElver)
-	p.nodeActive = nodeElver
+	p := testProxy(nodeLive)
+	p.nodeActive = nodeLive
 
-	stubNodes(t, []string{nodeElver, "elver-h2t2d"}, nil)
+	stubNodes(t, []string{nodeLive, "mycluster-new1"}, nil)
 
 	p.refreshNodes(context.Background())
 
-	if p.nodeActive != nodeElver {
+	if p.nodeActive != nodeLive {
 		t.Errorf("nodeActive = %q, want it kept", p.nodeActive)
 	}
 	if hasEvent(p, "no longer exists") {
@@ -140,7 +141,7 @@ func TestRefreshNodesIgnoresReordering(t *testing.T) {
 
 // A failed lookup must not throw the known nodes away: they may still work.
 func TestRefreshNodesKeepsNodesWhenLookupFails(t *testing.T) {
-	p := testProxy(nodeGlean)
+	p := testProxy(nodeLive)
 
 	stubNodes(t, nil, io.ErrUnexpectedEOF)
 
@@ -157,7 +158,7 @@ func TestRefreshNodesKeepsNodesWhenLookupFails(t *testing.T) {
 // A successful check clears the pause, so a recovered proxy restarts promptly
 // if it fails again later.
 func TestSuccessfulCheckResetsBackoff(t *testing.T) {
-	p := testProxy(nodeGlean)
+	p := testProxy(nodeLive)
 	p.failedRestarts = 4
 	p.nextRestart = time.Now().Add(time.Hour)
 
