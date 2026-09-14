@@ -170,8 +170,35 @@ func TestPingTreatsOnlySuccessAsHealthy(t *testing.T) {
 			pinger:        &http.Client{Transport: stubTransport{status: tc.status}},
 		}
 
-		if got := p.Ping(context.Background()); got != tc.want {
+		if got := p.Ping(context.Background()).success; got != tc.want {
 			t.Errorf("Ping() with HTTP %d = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+// A restart moves the tunnel to another node and drops every connection on the
+// port. That can only help when the check got no answer, or an answer the
+// server itself called an error; a 404 from a gateway with no matching route
+// proves the tunnel works, and no restart will bring the route back.
+func TestRestartOnlyWhenTunnelIsSuspect(t *testing.T) {
+	tests := []struct {
+		name   string
+		result pingResult
+		want   bool
+	}{
+		{name: "transport error", result: pingResult{err: io.ErrUnexpectedEOF}, want: true},
+		{name: "no nodes", result: pingResult{}, want: true},
+		{name: "server error", result: pingResult{statusCode: 500}, want: true},
+		{name: "gateway unavailable", result: pingResult{statusCode: 503}, want: true},
+		{name: "route missing", result: pingResult{statusCode: 404}, want: false},
+		{name: "unauthorised", result: pingResult{statusCode: 401}, want: false},
+		{name: "redirect", result: pingResult{statusCode: 301}, want: false},
+		{name: "healthy", result: pingResult{success: true, statusCode: 200}, want: false},
+	}
+
+	for _, tc := range tests {
+		if got := tc.result.restartMayHelp(); got != tc.want {
+			t.Errorf("%s: restartMayHelp() = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
