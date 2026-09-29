@@ -1,0 +1,36 @@
+# linkmeup
+
+Linkmeup ("_link-me-up_") is a tool to help you access web applications (HTTPS protocol) in private Giant Swarm installations, with the help of Teleport.
+
+## Prerequisites
+
+1. You need `tsh` installed. [Installation instructions](https://goteleport.com/docs/connect-your-client/tsh/#installing-tsh)
+2. You must have logged in via `tsh login --auth ... --proxy ... CLUSTER`. Giant Swarm users find the correct command in the [intranet](https://intranet.giantswarm.io/docs/support-and-ops/teleport/web-access/).
+
+## Configuration
+
+Linkmeup requires a config file. It will look for a file called `linkmeup.yaml` in `$HOME/.config` and in the current working directory. Look at `linkmeup.example.yaml`for an explanation of the format.
+
+Giant Swarm users find the latest config in the [intranet](https://intranet.giantswarm.io/docs/support-and-ops/teleport/web-access/#linkmeup).
+
+## Installation
+
+With Go installed, you can install the tool like this:
+
+```bash
+go install github.com/giantswarm/linkmeup@latest
+```
+
+## Usage
+
+Simply run `linkmeup` in the terminal.
+
+In the terminal user interface, navigate the list of installations with `↑`/`↓` (or `k`/`j`) and hit `Enter` to see details for the selected installation, including the reason why its proxy is unhealthy. Hit `Enter` or `Esc` to get back to the list, and `q` to quit.
+
+Use the automatic proxy configuration address `http://localhost:9999/proxy.pac` in your browser or operating system settings. This will instruct clients to use the proxy servers only for the specific host names configured.
+
+Hit Ctrl + C to stop the program.
+
+## Limitations
+
+- A tunnel that cannot be established makes `tsh` attempt Teleport re-authentication, which opens a browser tab. linkmeup now spaces restart attempts out, up to 15 minutes apart, so a broken installation produces a handful of tabs an hour rather than a stream of them. Suppressing them entirely needs a `tsh` flag that currently does not work (`--no-relogin` consumes the target host in Teleport v18).
