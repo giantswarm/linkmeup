@@ -9,15 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- TUI: press `Enter` on a selected installation to open a detail view explaining its health, including the last check result (HTTP status, error, latency, age), the Teleport nodes and active node, the node lookup error behind `- No Nodes`, and a log of recent events like failed checks and tunnel restarts.
+## [0.7.3] - 2026-09-14
 
 ### Changed
 
-- Release binaries now include darwin/amd64, darwin/arm64, windows/amd64, and windows/arm64 alongside the existing linux targets. Windows binaries are named `template-windows-<arch>.exe`.
 - Health checks now only treat an HTTP 2xx response as healthy, instead of anything below 500. A gateway with no route for the check hostname answers 404, which used to be reported as a healthy proxy.
 - A failing check only restarts the tunnel when the check got no answer or a 5xx. An answer of any other kind proves the tunnel works, so the proxy is now marked unhealthy without being torn down and moved to another node.
+
+## [0.7.2] - 2026-09-13
+
+### Changed
+
 - Restart attempts for a failing proxy now back off, from 30 seconds up to 15 minutes, instead of repeating every 30 seconds indefinitely. Each attempt runs `tsh ssh`, which opens a browser tab for Teleport re-authentication when it fails, so a permanently broken installation used to produce roughly 120 tabs an hour.
 
 ### Fixed
@@ -28,10 +30,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A restart now really does move to the node `selectNode` picked. `Start` chose a random node instead, which could land on the node that had just failed.
 - A proxy that starts with no nodes available now keeps looking for them, rather than staying idle until linkmeup is restarted.
 
+## [0.7.1] - 2026-09-13
+
+### Fixed
+
 - Health checks no longer leak a goroutine and a socket per check when a tunnel accepts connections but stalls during the SOCKS5 handshake. The dial now honors the context and times out after 10 seconds.
 - Pooled connections are dropped when a tunnel is stopped, instead of lingering until they are used again.
 - Stopping a tunnel now kills the whole `tsh` process group on Unix, so child processes no longer survive as orphans. On Windows, only the `tsh` process itself is killed, as before.
 - Quitting no longer leaves a tunnel behind when a health check restarts a proxy during shutdown, or when starting one proxy fails after others are already running.
+
+## [0.7.0] - 2026-09-11
+
+### Added
+
+- TUI: press `Enter` on a selected installation to open a detail view explaining its health, including the last check result (HTTP status, error, latency, age), the Teleport nodes and active node, the node lookup error behind `- No Nodes`, and a log of recent events like failed checks and tunnel restarts.
+
+## [0.6.0] - 2026-06-17
+
+### Changed
+
+- Release binaries now include darwin/amd64, darwin/arm64, windows/amd64, and windows/arm64 alongside the existing linux targets. Windows binaries are named `template-windows-<arch>.exe`.
 
 ## [0.5.0] - 2026-04-01
 
@@ -69,7 +87,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - First implementation
 
-[Unreleased]: https://github.com/giantswarm/linkmeup/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/giantswarm/linkmeup/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/giantswarm/linkmeup/compare/v0.7.2...v0.7.3
+[0.7.2]: https://github.com/giantswarm/linkmeup/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/giantswarm/linkmeup/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/giantswarm/linkmeup/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/giantswarm/linkmeup/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/giantswarm/linkmeup/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/giantswarm/linkmeup/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/giantswarm/linkmeup/compare/v0.3.0...v0.3.1
