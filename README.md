@@ -31,6 +31,8 @@ Use the automatic proxy configuration address `http://localhost:9999/proxy.pac` 
 
 Hit Ctrl + C to stop the program.
 
+Run `linkmeup version` to print the version, commit and build time of the binary, or `linkmeup --version`. Neither needs a config file.
+
 ## Limitations
 
 - A tunnel that cannot be established makes `tsh` attempt Teleport re-authentication, which opens a browser tab. linkmeup now spaces restart attempts out, up to 15 minutes apart, so a broken installation produces a handful of tabs an hour rather than a stream of them. Suppressing them entirely needs a `tsh` flag that currently does not work (`--no-relogin` consumes the target host in Teleport v18).
