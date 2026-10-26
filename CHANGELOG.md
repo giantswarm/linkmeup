@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `linkmeup version` and `linkmeup --version` print the version, commit and build time of the binary, as stamped by the release build. Neither reads the config file or starts a proxy.
 - TUI: press `Enter` on a selected installation to open a detail view explaining its health, including the last check result (HTTP status, error, latency, age), the Teleport nodes and active node, the node lookup error behind `- No Nodes`, and a log of recent events like failed checks and tunnel restarts.
 
 ### Changed
@@ -22,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `linkmeup help` and `linkmeup completion` no longer require a config file. Only running the proxies reads it.
 - An installation whose control plane nodes are replaced now recovers. The node list was previously read once at startup and never refreshed, so every restart kept targeting nodes that no longer existed.
 - The node lookup no longer treats anything `tsh` writes to stderr as a failure. A warning alongside a successful lookup used to discard the result.
 - The node lookup is bounded by a 30 second timeout and stops when linkmeup shuts down, so a `tsh` waiting on a browser login cannot hold up quitting.

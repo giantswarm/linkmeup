@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/linkmeup/pkg/conf"
 	"github.com/giantswarm/linkmeup/pkg/pacserver"
+	"github.com/giantswarm/linkmeup/pkg/project"
 	"github.com/giantswarm/linkmeup/pkg/proxy"
 	"github.com/giantswarm/linkmeup/pkg/tshstatus"
 	"github.com/giantswarm/linkmeup/pkg/tui"
@@ -45,7 +46,8 @@ The command will serve a proxy auto configuration (PAC) file on
 
 You can use this to configure your browser or operating system to use the proxies.
 `,
-		RunE: runRootCommand,
+		Version: project.VersionLine(),
+		RunE:    runRootCommand,
 	}
 
 	logger *slog.Logger
@@ -57,7 +59,8 @@ func Execute() error {
 }
 
 func init() {
-	cobra.OnInitialize(initConfig)
+	rootCmd.SetVersionTemplate(`{{printf "` + project.Name + ` version %s\n" .Version}}`)
+	rootCmd.AddCommand(newVersionCmd())
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default $HOME/.config/linkmeup.yaml)")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "set the log level (debug, info, warn, error)")
@@ -122,6 +125,7 @@ func initConfig() {
 }
 
 func runRootCommand(cmd *cobra.Command, args []string) error {
+	initConfig()
 	logger.Debug("Starting linkmeup", slog.String("log_level", logLevel))
 
 	// Build login command to show to user in case of error
