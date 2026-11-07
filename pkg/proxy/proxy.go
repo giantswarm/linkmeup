@@ -194,7 +194,9 @@ func New(logger *slog.Logger, name string, domain string, checkEndpoint string) 
 	}
 
 	_ = p.selectNode()
-	_ = p.Start()
+	if err := p.Start(); err != nil {
+		p.logger.Error("Failed to start proxy", slog.String("name", p.Name), slog.Int("port", p.Port), slog.String("error", err.Error()))
+	}
 
 	return p, nil
 }
@@ -375,7 +377,7 @@ func restartBackoff(n int) time.Duration {
 
 // restart replaces the tunnel, moving it to a different node.
 func (p *Proxy) restart(ctx context.Context, attempt int, backoff time.Duration) {
-	p.logger.Debug("Restarting proxy with different node", slog.String("name", p.Name), slog.Int("attempt", attempt))
+	p.logger.Info("Restarting proxy with different node (tsh may attempt re-login)", slog.String("name", p.Name), slog.Int("port", p.Port), slog.Int("attempt", attempt), slog.Duration("backoff", backoff))
 	p.addEvent("restart attempt %d; next one no sooner than %s from now", attempt, backoff)
 
 	if err := p.Stop(); err != nil {
@@ -660,7 +662,7 @@ func (p *Proxy) recordPingResult(result *pingResult) {
 		p.nextRestart = time.Time{}
 
 		if !wasHealthy || isFirst {
-			p.logger.Info("Proxy changed to healthy", slog.String("name", p.Name), slog.String("domain", p.Domain))
+			p.logger.Info("Proxy changed to healthy", slog.String("name", p.Name), slog.Int("port", p.Port), slog.String("domain", p.Domain))
 			p.addEventLocked("check succeeded: %s", result.describe())
 		}
 		p.logger.Debug("Ping succeeded", slog.String("name", p.Name), slog.Duration("duration", result.duration))
@@ -668,7 +670,7 @@ func (p *Proxy) recordPingResult(result *pingResult) {
 	}
 
 	if wasHealthy || isFirst {
-		p.logger.Warn("Proxy changed to unhealthy", slog.String("name", p.Name), slog.String("domain", p.Domain))
+		p.logger.Warn("Proxy changed to unhealthy", slog.String("name", p.Name), slog.Int("port", p.Port), slog.String("domain", p.Domain), slog.String("reason", result.describe()))
 	}
 	p.addEventLocked("check failed on node %s: %s", p.nodeActive, result.describe())
 	p.logger.Debug("Ping failed", slog.String("name", p.Name), slog.String("domain", p.Domain), slog.String("node", p.nodeActive), slog.Int("status_code", result.statusCode), slog.Duration("duration", result.duration), slog.String("error", fmt.Sprintf("%v", result.err)))

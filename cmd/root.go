@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/giantswarm/linkmeup/pkg/conf"
 	"github.com/giantswarm/linkmeup/pkg/pacserver"
@@ -17,6 +19,7 @@ import (
 	"github.com/giantswarm/linkmeup/pkg/tshstatus"
 	"github.com/giantswarm/linkmeup/pkg/tui"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -28,6 +31,7 @@ var (
 	// Used for flags.
 	cfgFile  string
 	logLevel string
+	noTUI    bool
 	config   conf.Config
 
 	rootCmd = &cobra.Command{
@@ -63,6 +67,7 @@ func init() {
 	rootCmd.AddCommand(newVersionCmd())
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default $HOME/.config/linkmeup.yaml)")
+	rootCmd.Flags().BoolVar(&noTUI, "no-tui", false, "run without the terminal UI (automatic when stdin is not a terminal)")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "set the log level (debug, info, warn, error)")
 }
 
@@ -99,10 +104,14 @@ func initConfig() {
 		fmt.Printf("Invalid log level: %s. Valid options are: debug, info, warn, error, fatal.\n", logLevel)
 		os.Exit(1)
 	}
-	logger = slog.New(tint.NewTextHandler(os.Stdout, &tint.Options{
-		Level:      level,
-		TimeFormat: "Jan 02 15:04:05",
-	}))
+	if headlessMode(noTUI, term.IsTerminal(os.Stdin.Fd())) {
+		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+	} else {
+		logger = slog.New(tint.NewTextHandler(os.Stdout, &tint.Options{
+			Level:      level,
+			TimeFormat: "Jan 02 15:04:05",
+		}))
+	}
 
 	err := viper.ReadInConfig()
 	if err != nil {
@@ -159,46 +168,62 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 	}
 	logger.Debug("Active Teleport profile found", slog.String("cluster", status.Active.Cluster), slog.Time("valid_until", status.Active.ValidUntil))
 
-	// Silence the logger during TUI operation - redirect to discard
-	logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	headless := headlessMode(noTUI, term.IsTerminal(os.Stdin.Fd()))
+	if !headless {
+		// Silence the logger during TUI operation.
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	ctx := cmd.Context()
+	if headless {
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+	}
 
 	proxies, err := startProxies()
 	if err != nil {
 		return err
 	}
 
-	err = startWebserver(proxies)
+	defer stopProxies(proxies)
+
+	server, err := startWebserver(proxies)
 	if err != nil {
 		return err
 	}
-
-	// Set up signal handling for graceful shutdown
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigs
-		stopProxies(proxies)
-		os.Exit(0)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Error("Failed to stop PAC server", slog.String("error", err.Error()))
+		}
 	}()
 
-	// Run the TUI - this blocks until the user quits
-	err = tui.Run(proxies, pacPort)
-	if err != nil {
+	if headless {
+		logger.Info("Running without terminal UI")
+		<-ctx.Done()
+		logger.Info("Stopping linkmeup")
+		return nil
+	}
+
+	// Bubble Tea handles terminal signals; defers clean up on every return.
+	if err := tui.Run(proxies, pacPort); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 
-	// Clean up proxies when TUI exits
-	stopProxies(proxies)
-
 	return nil
+}
+
+func headlessMode(noTUI, stdinIsTerminal bool) bool {
+	return noTUI || !stdinIsTerminal
 }
 
 func stopProxies(proxies []*proxy.Proxy) {
 	for _, p := range proxies {
 		err := p.Close()
 		if err != nil {
-			// Can't log to TUI anymore, just continue
+			logger.Error("Failed to stop proxy", slog.String("name", p.Name), slog.String("error", err.Error()))
 			continue
 		}
 	}
@@ -217,6 +242,7 @@ func startProxies() ([]*proxy.Proxy, error) {
 			return nil, fmt.Errorf("failed to start proxy for %s: %w", inst.Name, err)
 		}
 
+		logger.Info("Proxy configured", slog.String("name", p.Name), slog.String("domain", p.Domain), slog.Int("port", p.Port))
 		p.PingConstantly()
 
 		started = append(started, p)
@@ -224,12 +250,14 @@ func startProxies() ([]*proxy.Proxy, error) {
 	return started, nil
 }
 
-func startWebserver(proxies []*proxy.Proxy) error {
+func startWebserver(proxies []*proxy.Proxy) (*pacserver.PacServer, error) {
 	server, err := pacserver.New(logger, proxies, pacPort)
 	if err != nil {
-		return fmt.Errorf("failed to create PAC server: %w", err)
+		return nil, fmt.Errorf("failed to create PAC server: %w", err)
 	}
 
-	server.Serve()
-	return nil
+	if err := server.Serve(); err != nil {
+		return nil, fmt.Errorf("failed to start PAC server: %w", err)
+	}
+	return server, nil
 }
