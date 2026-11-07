@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/linkmeup/pkg/tshstatus"
 	"github.com/giantswarm/linkmeup/pkg/tui"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
 	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
@@ -207,8 +208,9 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Bubble Tea handles terminal signals; defers clean up on every return.
-	if err := tui.Run(proxies, pacPort); err != nil {
+	// Bubble Tea reports SIGINT as ErrInterrupted; treat it as a clean stop.
+	// Defers clean up on every return.
+	if err := tui.Run(proxies, pacPort); err != nil && !errors.Is(err, tea.ErrInterrupted) {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 
