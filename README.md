@@ -33,6 +33,25 @@ Hit Ctrl + C to stop the program.
 
 Run `linkmeup version` to print the version, commit and build time of the binary, or `linkmeup --version`. Neither needs a config file.
 
+## Headless mode
+
+Run without the terminal UI in scripts, services, or agent sessions:
+
+```bash
+linkmeup --no-tui --config /path/to/linkmeup.yaml
+```
+
+Headless mode is selected automatically when standard input is not a terminal,
+including when it is redirected from `/dev/null`. On a terminal the UI remains
+the default. Headless mode writes plain, line-oriented logs to standard output:
+installation names and ports, health changes with failure reasons, and tunnel
+restart attempts (which can trigger Teleport re-login). `--log-level` controls
+the verbosity. Teleport login is still required before starting.
+
+The SOCKS5 proxies and `http://localhost:9999/proxy.pac` work in either mode.
+Send SIGINT (Ctrl+C) or SIGTERM to stop the PAC server, health checks, and tunnels
+cleanly.
+
 ## Limitations
 
 - A tunnel that cannot be established makes `tsh` attempt Teleport re-authentication, which opens a browser tab. linkmeup now spaces restart attempts out, up to 15 minutes apart, so a broken installation produces a handful of tabs an hour rather than a stream of them. Suppressing them entirely needs a `tsh` flag that currently does not work (`--no-relogin` consumes the target host in Teleport v18).

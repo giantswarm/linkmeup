@@ -2,8 +2,11 @@
 package pacserver
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -36,30 +39,39 @@ func New(logger *slog.Logger, proxies []*proxy.Proxy, port int) (*PacServer, err
 	}, nil
 }
 
-func (p *PacServer) Serve() {
-	// Create web server to serve PAC
-	path := "/proxy.pac"
-	url := fmt.Sprintf("http://localhost:%d%s", p.Port, path)
-	p.logger.Info("Serving proxy auto-configuration (PAC) file", slog.String("url", url))
-
-	http.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+// Serve binds the PAC port before returning and serves requests in the background.
+func (p *PacServer) Serve() error {
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", p.Port))
+	if err != nil {
+		return err
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/proxy.pac", func(w http.ResponseWriter, r *http.Request) {
 		p.logger.Debug("Serving request to PAC file", slog.String("url", r.URL.String()))
 		w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
 		_, _ = fmt.Fprint(w, p.Body)
 	})
-
+	p.server = &http.Server{
+		Handler:      mux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+		IdleTimeout:  5 * time.Second,
+	}
+	p.logger.Info("Serving proxy auto-configuration (PAC) file", slog.String("url", fmt.Sprintf("http://localhost:%d/proxy.pac", p.Port)))
 	go func() {
-		p.server = &http.Server{
-			Addr:         fmt.Sprintf(":%d", p.Port),
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 5 * time.Second,
-			IdleTimeout:  5 * time.Second,
-		}
-		err := p.server.ListenAndServe()
-		if err != nil {
+		if err := p.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			p.logger.Error("Auto-configuration web server error", slog.String("error", err.Error()))
 		}
 	}()
+	return nil
+}
+
+// Shutdown stops accepting PAC requests and waits for active requests to finish.
+func (p *PacServer) Shutdown(ctx context.Context) error {
+	if p.server == nil {
+		return nil
+	}
+	return p.server.Shutdown(ctx)
 }
 
 func renderPacFile(proxies []*proxy.Proxy) string {
